@@ -1,4 +1,8 @@
+pub mod bit_reader;
+pub mod huffman;
 pub mod kraken;
+pub mod tans;
+
 use std::fmt::Debug;
 use std::io::{ErrorKind, Read, Seek};
 use std::panic::Location;
@@ -32,7 +36,6 @@ struct BlockHeader {
 
 const SMALL_BLOCK: usize = 0x4000;
 const LARGE_BLOCK: usize = 0x40000;
-const SCRATCH_SIZE: usize = LARGE_BLOCK + 0x6C000; //Do we need the extra space or is it just for holding decoder structs?
 
 impl BlockHeader {
     fn block_size(&self) -> usize {
@@ -67,11 +70,9 @@ enum QuantumHeader {
     Uncompressed,
 }
 
-#[derive(Default)]
 pub struct Extractor<In: Read + Seek> {
     input: In,
-    scratch: Vec<u8>,
-    tmp: [u8; 8],
+    tmp: [u8; LARGE_BLOCK],
 }
 
 impl<In: Read + Seek> Read for Extractor<In> {
@@ -123,24 +124,24 @@ impl<In: Read + Seek> Extractor<In> {
     pub fn new(input: In) -> Extractor<In> {
         Extractor {
             input,
-            tmp: [0; 8],
-            scratch: Vec::with_capacity(LARGE_BLOCK),
+            tmp: [0; LARGE_BLOCK],
         }
     }
 
     fn extract(
         &mut self,
-        buf: &mut [u8],
+        output: &mut [u8],
         offset: usize,
         header: BlockHeader,
     ) -> std::io::Result<usize> {
-        let output = &mut buf[offset..];
-        let dst_bytes_left = std::cmp::min(output.len(), header.block_size());
+        let dst_bytes_left = std::cmp::min(output.len() - offset, header.block_size());
 
         if header.uncompressed {
             let mut bytes_copied = 0;
             while bytes_copied < dst_bytes_left {
-                let count = self.input.read(&mut output[bytes_copied..dst_bytes_left])?;
+                let count = self
+                    .input
+                    .read(&mut output[offset + bytes_copied..dst_bytes_left])?;
                 bytes_copied += count;
                 if count == 0 {
                     break;
@@ -159,21 +160,21 @@ impl<In: Read + Seek> Extractor<In> {
                 flag1,
                 flag2,
             } => {
-                self.scratch.resize(compressed_size, 0);
-                self.input.read_exact(&mut self.scratch)?;
+                let input = &mut self.tmp[..compressed_size];
+                self.input.read_exact(input)?;
                 if header.use_checksums {
                     // If you can find a file with checksums enabled maybe you can figure out which algorithm to use here
                 }
-                match header.decoder_type {
-                    DecoderType::Lzna => todo!(),
-                    DecoderType::Kraken => self.kraken.decode_quantum(
-                        offset,
-                        offset + dst_bytes_left,
-                    ),
-                    DecoderType::Mermaid => todo!(),
-                    DecoderType::Bitknit => todo!(),
-                    DecoderType::Leviathan => todo!(),
-                }
+                let bytes_read = match header.decoder_type {
+                    DecoderType::Lzna => compressed_size,
+                    DecoderType::Kraken => {
+                        KrakenDecoder::new(input, output).decode_quantum(offset, dst_bytes_left)
+                    }
+                    DecoderType::Mermaid => compressed_size,
+                    DecoderType::Bitknit => compressed_size,
+                    DecoderType::Leviathan => compressed_size,
+                };
+                assert_eq!(bytes_read, compressed_size);
                 log::debug!(
                     "Extracted {} bytes from {}",
                     dst_bytes_left,
@@ -195,17 +196,17 @@ impl<In: Read + Seek> Extractor<In> {
                 }
                 let from = offset - whole_match_distance;
                 let to = from + dst_bytes_left;
-                buf.copy_within(from..to, offset);
+                output.copy_within(from..to, offset);
                 Ok(dst_bytes_left)
             }
             QuantumHeader::Memset { value } => {
-                output[..dst_bytes_left].fill(value);
+                output[offset..][..dst_bytes_left].fill(value);
                 log::debug!("Set block to {}", value);
                 Ok(dst_bytes_left)
             }
             QuantumHeader::Uncompressed => self
                 .input
-                .read_exact(&mut output[..dst_bytes_left])
+                .read_exact(&mut output[offset..][..dst_bytes_left])
                 .and(Ok(dst_bytes_left)),
         }
     }
@@ -227,7 +228,7 @@ impl<In: Read + Seek> Extractor<In> {
 
     fn parse_quantum_header(&mut self, header: &BlockHeader) -> std::io::Result<QuantumHeader> {
         if header.block_size() == LARGE_BLOCK {
-            let v = usize::from_be_bytes(*self.read_bytes::<8>(3)?);
+            let v = usize::from_be_bytes(self.read_bytes(3)?);
             let size = v & 0x3FFFF;
             if size != 0x3ffff {
                 Ok(QuantumHeader::Compressed {
@@ -235,7 +236,7 @@ impl<In: Read + Seek> Extractor<In> {
                     flag1: ((v >> 18) & 1) == 1,
                     flag2: ((v >> 19) & 1) == 1,
                     checksum: if header.use_checksums {
-                        u32::from_be_bytes(*self.read_bytes(3)?)
+                        u32::from_be_bytes(self.read_bytes(3)?)
                     } else {
                         0
                     },
@@ -248,7 +249,7 @@ impl<In: Read + Seek> Extractor<In> {
                 self.io_error(ErrorKind::InvalidData, v)
             }
         } else {
-            let v = u16::from_be_bytes(*self.read_bytes(2)?);
+            let v = u16::from_be_bytes(self.read_bytes(2)?);
             let size = v & 0x3FFF;
             if size != 0x3FFF {
                 Ok(QuantumHeader::Compressed {
@@ -256,7 +257,7 @@ impl<In: Read + Seek> Extractor<In> {
                     flag1: (v >> 14) & 1 == 1,
                     flag2: (v >> 15) & 1 == 1,
                     checksum: if header.use_checksums {
-                        u32::from_be_bytes(*self.read_bytes(3)?)
+                        u32::from_be_bytes(self.read_bytes(3)?)
                     } else {
                         0
                     },
@@ -288,7 +289,7 @@ impl<In: Read + Seek> Extractor<In> {
     }
 
     fn parse_whole_match(&mut self) -> std::io::Result<usize> {
-        let v = usize::from(u16::from_be_bytes(*self.read_bytes(2)?));
+        let v = usize::from(u16::from_be_bytes(self.read_bytes(2)?));
         if v < 0x8000 {
             let mut x = 0;
             let mut pos = 0u32;
@@ -307,9 +308,9 @@ impl<In: Read + Seek> Extractor<In> {
         }
     }
 
-    fn read_bytes<const N: usize>(&mut self, to_read: usize) -> std::io::Result<&[u8; N]> {
+    fn read_bytes<const N: usize>(&mut self, to_read: usize) -> std::io::Result<[u8; N]> {
         assert!(to_read <= N);
-        let buf = self.tmp.first_chunk_mut().unwrap();
+        let mut buf = [0; N];
         if to_read < N {
             buf.fill(0)
         }

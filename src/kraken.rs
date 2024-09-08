@@ -1,4 +1,11 @@
-use std::{default, process::Output, usize};
+#![allow(non_snake_case)]
+
+use crate::bit_reader::BitReader2;
+use crate::tans::TansDecoder;
+use crate::{
+    bit_reader::BitReader,
+    huffman::{HuffRange, HuffReader, HuffRevLut, BASE_PREFIX},
+};
 
 // Kraken decompression happens in two phases, first one decodes
 // all the literals and copy lengths using huffman and second
@@ -27,242 +34,8 @@ pub struct KrakenLzTable {
     len_stream_size: usize,
 }
 
-pub struct KrakenDecoder {
-    input: Vec<u8>,
-    output: Vec<u8>,
-    scratch: Vec<u8>,
-}
-
-struct BitReader {
-    /// |p| holds the current u8 and |p_end| the end of the buffer.
-    pub p: Pointer,
-    pub p_end: Pointer,
-    /// Bits accumulated so far
-    pub bits: u32,
-    /// Next u8 will end up in the |bitpos| position in |bits|.
-    pub bitpos: u32,
-}
-impl BitReader {
-    // Read more bytes to make sure we always have at least 24 bits in |bits|.
-    fn Refill(&mut self, source: &mut KrakenDecoder) {
-        assert!(self.bitpos <= 24);
-        while self.bitpos > 0 {
-            self.bits |= (if self.p < self.p_end {
-                source.get_as_u32(self.p)
-            } else {
-                0
-            }) << self.bitpos;
-            self.bitpos -= 8;
-            self.p += 1;
-        }
-    }
-
-    // Read more bytes to make sure we always have at least 24 bits in |bits|,
-    // used when reading backwards.
-    fn RefillBackwards(&mut self, source: &mut KrakenDecoder) {
-        assert!(self.bitpos <= 24);
-        while self.bitpos > 0 {
-            self.p -= 1;
-            self.bits |= (if self.p >= self.p_end {
-                source.get_as_u32(self.p)
-            } else {
-                0
-            }) << self.bitpos;
-            self.bitpos -= 8;
-        }
-    }
-
-    // Refill bits then read a single bit.
-    fn ReadBit(&mut self, source: &mut KrakenDecoder) -> u32 {
-        let r;
-        self.Refill(source);
-        r = self.bits >> 31;
-        self.bits <<= 1;
-        self.bitpos += 1;
-        return r;
-    }
-
-    fn ReadBitNoRefill(&mut self) -> u32 {
-        let r;
-        r = self.bits >> 31;
-        self.bits <<= 1;
-        self.bitpos += 1;
-        return r;
-    }
-
-    // Read |n| bits without refilling.
-    fn ReadBitsNoRefill(&mut self, n: u32) -> u32 {
-        let r = self.bits >> (32 - n);
-        self.bits <<= n;
-        self.bitpos += n;
-        return r;
-    }
-
-    // Read |n| bits without refilling, n may be zero.
-    fn ReadBitsNoRefillZero(&mut self, n: u32) -> u32 {
-        let r = self.bits >> 1 >> (31 - n);
-        self.bits <<= n;
-        self.bitpos += n;
-        return r;
-    }
-
-    fn ReadMoreThan24Bits(&mut self, source: &mut KrakenDecoder, n: u32) -> u32 {
-        let mut rv;
-        if n <= 24 {
-            rv = self.ReadBitsNoRefillZero(n);
-        } else {
-            rv = self.ReadBitsNoRefill(24) << (n - 24);
-            self.Refill(source);
-            rv += self.ReadBitsNoRefill(n - 24);
-        }
-        self.Refill(source);
-        return rv;
-    }
-
-    fn ReadMoreThan24BitsB(&mut self, source: &mut KrakenDecoder, n: u32) -> u32 {
-        let mut rv;
-        if n <= 24 {
-            rv = self.ReadBitsNoRefillZero(n);
-        } else {
-            rv = self.ReadBitsNoRefill(24) << (n - 24);
-            self.RefillBackwards(source);
-            rv += self.ReadBitsNoRefill(n - 24);
-        }
-        self.RefillBackwards(source);
-        return rv;
-    }
-
-    // Reads a gamma value.
-    // Assumes bitreader is already filled with at least 23 bits
-    fn ReadGamma(&mut self) -> u32 {
-        let mut n;
-        let r;
-        if self.bits != 0 {
-            n = self.bits.ilog2();
-        } else {
-            n = 32;
-        }
-        n = 2 * n + 2;
-        assert!(n < 24);
-        self.bitpos = self
-            .bitpos
-            .checked_add_signed(n.try_into().unwrap())
-            .unwrap();
-        r = self.bits >> (32 - n);
-        self.bits <<= n;
-        return r - 2;
-    }
-
-    // Reads a gamma value with |forced| number of forced bits.
-    fn ReadGammaX(&mut self, forced: u32) -> u32 {
-        let r;
-        if self.bits != 0 {
-            let lz = self.bits.ilog2();
-            assert!(lz < 24);
-            r = (self.bits >> (31 - lz - forced)) + ((lz - 1) << forced);
-            self.bits <<= lz + forced + 1;
-            self.bitpos += lz + forced + 1;
-            return r;
-        }
-        return 0;
-    }
-
-    // Reads a offset code parametrized by |v|.
-    fn ReadDistance(&mut self, source: &mut KrakenDecoder, v: u32) -> u32 {
-        let w;
-        let m;
-        let n;
-        let mut rv;
-        if v < 0xF0 {
-            n = (v >> 4) + 4;
-            w = (self.bits | 1).rotate_left(n);
-            self.bitpos += n;
-            m = (2 << n) - 1;
-            self.bits = w & !m;
-            rv = ((w & m) << 4) + (v & 0xF) - 248;
-        } else {
-            n = v - 0xF0 + 4;
-            w = (self.bits | 1).rotate_left(n);
-            self.bitpos += n;
-            m = (2 << n) - 1;
-            self.bits = w & !m;
-            rv = 8322816 + ((w & m) << 12);
-            self.Refill(source);
-            rv += self.bits >> 20;
-            self.bitpos += 12;
-            self.bits <<= 12;
-        }
-        self.Refill(source);
-        return rv;
-    }
-
-    // Reads a offset code parametrized by |v|, backwards.
-    fn ReadDistanceB(&mut self, source: &mut KrakenDecoder, v: u32) -> u32 {
-        let w;
-        let m;
-        let n;
-        let mut rv;
-        if v < 0xF0 {
-            n = (v >> 4) + 4;
-            w = (self.bits | 1).rotate_left(n);
-            self.bitpos += n;
-            m = (2 << n) - 1;
-            self.bits = w & !m;
-            rv = ((w & m) << 4) + (v & 0xF) - 248;
-        } else {
-            n = v - 0xF0 + 4;
-            w = (self.bits | 1).rotate_left(n);
-            self.bitpos += n;
-            m = (2 << n) - 1;
-            self.bits = w & !m;
-            rv = 8322816 + ((w & m) << 12);
-            self.RefillBackwards(source);
-            rv += self.bits >> (32 - 12);
-            self.bitpos += 12;
-            self.bits <<= 12;
-        }
-        self.RefillBackwards(source);
-        return rv;
-    }
-
-    // Reads a length code.
-    fn ReadLength(&mut self, source: &mut KrakenDecoder) -> Option<u32> {
-        let mut n;
-        n = self.bits.ilog2();
-        if n > 12 {
-            return None;
-        }
-        self.bitpos += n;
-        self.bits <<= n;
-        self.Refill(source);
-        n += 7;
-        self.bitpos += n;
-        let rv = (self.bits >> (32 - n)) - 64;
-        self.bits <<= n;
-        self.Refill(source);
-        return Some(rv);
-    }
-
-    // Reads a length code, backwards.
-    fn ReadLengthB(&mut self, source: &mut KrakenDecoder) -> Option<u32> {
-        let mut n = self.bits.ilog2();
-        if n > 12 {
-            return None;
-        }
-        self.bitpos += n;
-        self.bits <<= n;
-        self.RefillBackwards(source);
-        n += 7;
-        self.bitpos += n;
-        let rv = (self.bits >> (32 - n)) - 64;
-        self.bits <<= n;
-        self.RefillBackwards(source);
-        return Some(rv);
-    }
-}
-
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
-enum PointerDest {
+pub enum PointerDest {
     #[default]
     Null,
     Input,
@@ -281,7 +54,7 @@ impl PartialOrd for PointerDest {
 }
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, PartialOrd)]
-struct Pointer {
+pub struct Pointer {
     into: PointerDest,
     index: usize,
 }
@@ -296,12 +69,6 @@ impl Pointer {
     fn output(index: usize) -> Self {
         Pointer {
             into: PointerDest::Output,
-            index,
-        }
-    }
-    fn scratch(index: usize) -> Self {
-        Pointer {
-            into: PointerDest::Scratch,
             index,
         }
     }
@@ -366,11 +133,23 @@ impl std::ops::SubAssign<usize> for Pointer {
     }
 }
 
+impl std::ops::AddAssign<i32> for Pointer {
+    fn add_assign(&mut self, rhs: i32) {
+        self.index = self.index.checked_add_signed(rhs as _).unwrap()
+    }
+}
+
+impl std::ops::SubAssign<i32> for Pointer {
+    fn sub_assign(&mut self, rhs: i32) {
+        self.index = self.index.checked_add_signed(-rhs as _).unwrap()
+    }
+}
+
 impl std::ops::Sub<Pointer> for Pointer {
     type Output = usize;
 
     fn sub(self, rhs: Pointer) -> Self::Output {
-        assert!(self.into == rhs.into);
+        assert_eq!(self.into, rhs.into);
         self.index - rhs.index
     }
 }
@@ -386,14 +165,36 @@ impl std::ops::Sub<usize> for Pointer {
     }
 }
 
+impl std::ops::Sub<u32> for Pointer {
+    type Output = Pointer;
+
+    fn sub(self, rhs: u32) -> Self::Output {
+        self.sub(rhs as usize)
+    }
+}
+
+impl std::ops::Sub<i32> for Pointer {
+    type Output = Pointer;
+
+    fn sub(self, rhs: i32) -> Self::Output {
+        Pointer {
+            index: self
+                .index
+                .checked_add_signed(-isize::try_from(rhs).unwrap())
+                .unwrap(),
+            ..self
+        }
+    }
+}
+
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, PartialOrd)]
-struct IntPointer {
+pub struct IntPointer {
     into: PointerDest,
     index: usize,
 }
 
 impl IntPointer {
-    fn add_byte_offset(self, rhs: usize) -> Self {
+    pub fn add_byte_offset(self, rhs: usize) -> Self {
         IntPointer {
             index: self.index + rhs,
             ..self
@@ -433,7 +234,7 @@ impl std::ops::Sub<IntPointer> for IntPointer {
     type Output = usize;
 
     fn sub(self, rhs: IntPointer) -> Self::Output {
-        assert!(self.into == rhs.into);
+        assert_eq!(self.into, rhs.into);
         (self.index - rhs.index) / 4
     }
 }
@@ -458,7 +259,7 @@ impl From<Pointer> for IntPointer {
     }
 }
 
-impl KrakenDecoder {
+impl KrakenDecoder<'_> {
     // Decode one 256kb big quantum block. It's divided into two 128k blocks
     // internally that are compressed separately but with a shared history.
     pub fn decode_quantum(&mut self, write_from: usize, write_to: usize) -> usize {
@@ -466,8 +267,8 @@ impl KrakenDecoder {
         let mut src = Pointer::output(0);
         let src_in = Pointer::input(0);
         let src_end = Pointer::output(self.input.len());
-        let mut dst = Pointer::output(0);
-        let dst_start = Pointer::output(write_from);
+        let mut dst = Pointer::output(write_from);
+        let dst_start = Pointer::output(0);
         let dst_end = Pointer::output(write_to);
         let scratch = Pointer::output(0);
         let scratch_end = Pointer::output(self.scratch.len());
@@ -494,7 +295,7 @@ impl KrakenDecoder {
                     scratch,
                     scratch_end,
                 );
-                if src_used < 0 || written_bytes != dst_count {
+                if written_bytes != dst_count {
                     panic!()
                 }
             } else {
@@ -541,18 +342,18 @@ impl KrakenDecoder {
             dst += dst_count;
         }
 
-        return src - src_in;
+        src - src_in
     }
 
     fn Kraken_DecodeBytes(
         &mut self,
         output: &mut Pointer,
-        src: Pointer,
+        mut src: Pointer,
         src_end: Pointer,
         decoded_size: &mut usize,
         output_size: usize,
         force_memmove: bool,
-        scratch: Pointer,
+        mut scratch: Pointer,
         scratch_end: Pointer,
     ) -> usize {
         let src_org = src;
@@ -636,16 +437,1138 @@ impl KrakenDecoder {
         }
 
         let src_used = match chunk_type {
-            2 | 4 => Kraken_DecodeBytes_Type12(src, src_size, dst, dst_size, chunk_type >> 1),
-            5 => Krak_DecodeRecursive(src, src_size, dst, dst_size, scratch, scratch_end),
-            3 => Krak_DecodeRLE(src, src_size, dst, dst_size, scratch, scratch_end),
-            1 => Krak_DecodeTans(src, src_size, dst, dst_size, scratch, scratch_end),
+            2 | 4 => self.Kraken_DecodeBytes_Type12(src, src_size, dst, dst_size, chunk_type >> 1),
+            5 => self.Krak_DecodeRecursive(src, src_size, dst, dst_size, scratch, scratch_end),
+            3 => self.Krak_DecodeRLE(src, src_size, dst, dst_size, scratch, scratch_end),
+            1 => self.Krak_DecodeTans(src, src_size, dst, dst_size),
+            _ => None,
         };
-        if src_used != src_size {
+        if !src_used.is_some_and(|used| used == src_size) {
             panic!()
         }
         *decoded_size = dst_size;
-        return src + src_size - src_org;
+        src + src_size - src_org
+    }
+
+    fn Krak_DecodeTans(
+        &mut self,
+        mut src: Pointer,
+        src_size: usize,
+        dst: Pointer,
+        dst_size: usize,
+    ) -> Option<usize> {
+        if src_size < 8 || dst_size < 5 {
+            return None;
+        }
+
+        let mut src_end = src + src_size;
+
+        let mut br = BitReader {
+            bitpos: 24,
+            bits: 0,
+            p: src,
+            p_end: src_end,
+        };
+        br.Refill(self);
+
+        // reserved bit
+        if br.ReadBitNoRefill() {
+            return None;
+        }
+
+        let L_bits = br.ReadBitsNoRefill(2) + 8;
+
+        let tans_data = TansDecoder::decode_table(self, &mut br, L_bits)?;
+
+        src = br.p - (24 - br.bitpos) / 8;
+
+        if src >= src_end {
+            return None;
+        }
+
+        let mut decoder = TansDecoder::default();
+        decoder.dst = dst;
+        decoder.dst_end = dst + dst_size - 5;
+
+        decoder.lut = decoder.init_lut(&tans_data, L_bits as u32);
+
+        // Read out the initial state
+        let L_mask = (1 << L_bits) - 1;
+        let mut bits_f = self.get_bytes_as_usize_le(src, 4);
+        src += 4;
+        src_end -= 4;
+        let mut bits_b = self.get_bytes_as_usize_be(src_end, 4);
+        let mut bitpos_f = 32;
+        let mut bitpos_b = 32;
+
+        // Read first two.
+        decoder.state[0] = bits_f & L_mask;
+        decoder.state[1] = bits_b & L_mask;
+        bits_f >>= L_bits;
+        bitpos_f -= L_bits;
+        bits_b >>= L_bits;
+        bitpos_b -= L_bits;
+
+        // Read next two.
+        decoder.state[2] = bits_f & L_mask;
+        decoder.state[3] = bits_b & L_mask;
+        bits_f >>= L_bits;
+        bitpos_f -= L_bits;
+        bits_b >>= L_bits;
+        bitpos_b -= L_bits;
+
+        // Refill more bits
+        bits_f |= self.get_bytes_as_usize_le(src, 4) << bitpos_f;
+        src += (31 - bitpos_f) >> 3;
+        bitpos_f |= 24;
+
+        // Read final state variable
+        decoder.state[4] = bits_f & L_mask;
+        bits_f >>= L_bits;
+        bitpos_f -= L_bits;
+
+        decoder.bits_f = bits_f;
+        decoder.ptr_f = src - (bitpos_f >> 3);
+        decoder.bitpos_f = (bitpos_f & 7) as _;
+
+        decoder.bits_b = bits_b;
+        decoder.ptr_b = src_end + (bitpos_b >> 3);
+        decoder.bitpos_b = (bitpos_b & 7) as _;
+
+        if !decoder.decode(self) {
+            return None;
+        }
+
+        Some(src_size)
+    }
+
+    fn Krak_DecodeRLE(
+        &mut self,
+        src: Pointer,
+        src_size: usize,
+        mut dst: Pointer,
+        dst_size: usize,
+        scratch: Pointer,
+        scratch_end: Pointer,
+    ) -> Option<usize> {
+        if src_size <= 1 {
+            if src_size != 1 {
+                return None;
+            }
+            self.memset(dst, self.get_byte(src), dst_size);
+            return Some(1);
+        }
+        let dst_end = dst + dst_size;
+        let mut cmd_ptr = src + 1;
+        let mut cmd_ptr_end = src + src_size;
+        // Unpack the first X bytes of the command buffer?
+        if self.get_as_bool(src) {
+            let mut dst_ptr = scratch;
+            let mut dec_size = 0;
+            let n = self.Kraken_DecodeBytes(
+                &mut dst_ptr,
+                src,
+                src + src_size,
+                &mut dec_size,
+                scratch_end - scratch,
+                true,
+                scratch,
+                scratch_end,
+            );
+            if n <= 0 {
+                return None;
+            }
+            let cmd_len = src_size - n + dec_size;
+            if cmd_len > scratch_end - scratch {
+                return None;
+            }
+            self.memcpy(dst_ptr + dec_size, src + n, src_size - n);
+            cmd_ptr = dst_ptr;
+            cmd_ptr_end = dst_ptr + cmd_len;
+        }
+
+        let mut rle_byte = 0;
+
+        while cmd_ptr < cmd_ptr_end {
+            let cmd = self.get_as_usize(cmd_ptr_end - 1);
+            if cmd > 0x2f {
+                cmd_ptr_end -= 1;
+                let bytes_to_copy = !cmd & 0xF;
+                let bytes_to_rle = cmd >> 4;
+                if dst_end - dst < bytes_to_copy + bytes_to_rle
+                    || cmd_ptr_end - cmd_ptr < bytes_to_copy
+                {
+                    return None;
+                }
+                self.memcpy(dst, cmd_ptr, bytes_to_copy);
+                cmd_ptr += bytes_to_copy;
+                dst += bytes_to_copy;
+                self.memset(dst, rle_byte, bytes_to_rle);
+                dst += bytes_to_rle;
+            } else if cmd >= 0x10 {
+                cmd_ptr_end -= 2;
+                let data = self.get_bytes_as_usize_le(cmd_ptr_end, 2) - 4096;
+                let bytes_to_copy = data & 0x3F;
+                let bytes_to_rle = data >> 6;
+                if dst_end - dst < bytes_to_copy + bytes_to_rle
+                    || cmd_ptr_end - cmd_ptr < bytes_to_copy
+                {
+                    return None;
+                }
+                self.memcpy(dst, cmd_ptr, bytes_to_copy);
+                cmd_ptr += bytes_to_copy;
+                dst += bytes_to_copy;
+                self.memset(dst, rle_byte, bytes_to_rle);
+                dst += bytes_to_rle;
+            } else if cmd == 1 {
+                rle_byte = self.get_byte(cmd_ptr);
+                cmd_ptr += 1;
+                cmd_ptr_end -= 1;
+            } else if cmd >= 9 {
+                cmd_ptr_end -= 2;
+                let bytes_to_rle = (self.get_bytes_as_usize_le(cmd_ptr_end, 2) - 0x8ff) * 128;
+                if dst_end - dst < bytes_to_rle {
+                    return None;
+                }
+                self.memset(dst, rle_byte, bytes_to_rle);
+                dst += bytes_to_rle;
+            } else {
+                cmd_ptr_end -= 2;
+                let bytes_to_copy = (self.get_bytes_as_usize_le(cmd_ptr_end, 2) - 511) * 64;
+                if cmd_ptr_end - cmd_ptr < bytes_to_copy || dst_end - dst < bytes_to_copy {
+                    return None;
+                }
+                self.memcpy(dst, cmd_ptr, bytes_to_copy);
+                dst += bytes_to_copy;
+                cmd_ptr += bytes_to_copy;
+            }
+        }
+        if cmd_ptr_end != cmd_ptr {
+            return None;
+        }
+
+        if dst != dst_end {
+            return None;
+        }
+
+        Some(src_size)
+    }
+
+    fn Krak_DecodeRecursive(
+        &mut self,
+        src_org: Pointer,
+        src_size: usize,
+        mut output: Pointer,
+        output_size: usize,
+        scratch: Pointer,
+        scratch_end: Pointer,
+    ) -> Option<usize> {
+        let mut src = src_org;
+        let output_end = output + output_size;
+        let src_end = src + src_size;
+
+        if src_size < 6 {
+            return None;
+        }
+
+        let n = self.get_as_usize(src) & 0x7f;
+        if n < 2 {
+            return None;
+        }
+
+        if (self.get_byte(src) & 0x80) != 0 {
+            src += 1;
+            for _ in 0..n {
+                let mut decoded_size = 0;
+                let output_size = output_end - output;
+                let dec = self.Kraken_DecodeBytes(
+                    &mut output,
+                    src,
+                    src_end,
+                    &mut decoded_size,
+                    output_size,
+                    true,
+                    scratch,
+                    scratch_end,
+                );
+                output += decoded_size;
+                src += dec;
+            }
+            if output != output_end {
+                return None;
+            }
+            Some(src - src_org)
+        } else {
+            let (dec, decoded_size, ..) = self.Kraken_DecodeMultiArray(
+                src,
+                src_end,
+                output,
+                output_end,
+                1,
+                true,
+                scratch,
+                scratch_end,
+            )?;
+            output += decoded_size;
+            if output != output_end {
+                return None;
+            }
+            Some(dec)
+        }
+    }
+
+    fn Kraken_DecodeMultiArray(
+        &mut self,
+        src_org: Pointer,
+        src_end: Pointer,
+        mut dst: Pointer,
+        dst_end: Pointer,
+        array_count: usize,
+        force_memmove: bool,
+        scratch: Pointer,
+        scratch_end: Pointer,
+    ) -> Option<(usize, usize, Vec<Pointer>, Vec<usize>)> {
+        let mut src = src_org;
+        let mut array_data = Vec::with_capacity(array_count);
+        let mut array_lens = Vec::with_capacity(array_count);
+
+        if src_end - src < 4 {
+            return None;
+        }
+
+        let mut decoded_size = 0;
+        let mut num_arrays_in_file = self.get_as_usize(src);
+        src += 1;
+        if (num_arrays_in_file & 0x80) == 0 {
+            return None;
+        }
+        num_arrays_in_file &= 0x3f;
+
+        let mut total_size = 0;
+
+        if num_arrays_in_file == 0 {
+            for _ in 0..array_count {
+                let mut chunk_dst = dst;
+                let dec = self.Kraken_DecodeBytes(
+                    &mut chunk_dst,
+                    src,
+                    src_end,
+                    &mut decoded_size,
+                    dst_end - dst,
+                    force_memmove,
+                    scratch,
+                    scratch_end,
+                );
+                dst += decoded_size;
+                array_data.push(dst);
+                array_lens.push(decoded_size);
+                src += dec;
+                total_size += decoded_size;
+            }
+            return Some((src - src_org, total_size, array_data, array_lens)); // not supported yet
+        }
+
+        let mut entropy_array_data = [Default::default(); 63];
+        let mut entropy_array_size = [0; 63];
+
+        // First loop just decodes everything to scratch
+        let mut scratch_cur = scratch;
+
+        for i in 0..num_arrays_in_file {
+            let mut chunk_dst = scratch_cur;
+            let dec = self.Kraken_DecodeBytes(
+                &mut chunk_dst,
+                src,
+                src_end,
+                &mut decoded_size,
+                scratch_end - scratch_cur,
+                force_memmove,
+                scratch_cur,
+                scratch_end,
+            );
+            entropy_array_data[i] = chunk_dst;
+            entropy_array_size[i] = decoded_size;
+            scratch_cur += decoded_size;
+            total_size += decoded_size;
+            src += dec;
+        }
+        let total_size_out = total_size;
+
+        if src_end - src < 3 {
+            return None;
+        }
+
+        let Q = self.get_bytes_as_usize_le(src, 2);
+        src += 2;
+
+        let num_indexes = self.Kraken_GetBlockSize(src, src_end, total_size)?;
+
+        let mut num_lens = num_indexes - array_count;
+        if num_lens < 1 {
+            return None;
+        }
+
+        if scratch_end - scratch_cur < num_indexes {
+            return None;
+        }
+        let mut interval_lenlog2 = scratch_cur;
+        scratch_cur += num_indexes;
+
+        if scratch_end - scratch_cur < num_indexes {
+            return None;
+        }
+        let mut interval_indexes = scratch_cur;
+        scratch_cur += num_indexes;
+
+        if (Q & 0x8000) != 0 {
+            let mut size_out = 0;
+            let n = self.Kraken_DecodeBytes(
+                &mut interval_indexes,
+                src,
+                src_end,
+                &mut size_out,
+                num_indexes,
+                true,
+                scratch_cur,
+                scratch_end,
+            );
+            if size_out != num_indexes {
+                return None;
+            }
+            src += n;
+
+            for i in 0..num_indexes {
+                let t = self.get_byte(interval_indexes + i);
+                self.set(interval_lenlog2 + i, t >> 4);
+                self.set(interval_indexes + i, t & 0xF);
+            }
+
+            num_lens = num_indexes;
+        } else {
+            let lenlog2_chunksize = num_indexes - array_count;
+
+            let mut size_out = 0;
+            let n = self.Kraken_DecodeBytes(
+                &mut interval_indexes,
+                src,
+                src_end,
+                &mut size_out,
+                num_indexes,
+                false,
+                scratch_cur,
+                scratch_end,
+            );
+            src += n;
+
+            let n = self.Kraken_DecodeBytes(
+                &mut interval_lenlog2,
+                src,
+                src_end,
+                &mut size_out,
+                lenlog2_chunksize,
+                false,
+                scratch_cur,
+                scratch_end,
+            );
+            src += n;
+
+            for i in 0..lenlog2_chunksize {
+                if self.get_byte(interval_lenlog2 + i) > 16 {
+                    return None;
+                }
+            }
+        }
+
+        if scratch_end - scratch_cur < 4 {
+            return None;
+        }
+
+        let mut decoded_intervals = Vec::with_capacity(num_lens);
+
+        let varbits_complen = Q & 0x3FFF;
+        if src_end - src < varbits_complen {
+            return None;
+        }
+
+        let mut f = src;
+        let mut bits_f = 0;
+        let mut bitpos_f = 24;
+
+        let src_end_actual = src + varbits_complen;
+
+        let mut b = src_end_actual;
+        let mut bits_b = 0;
+        let mut bitpos_b = 24;
+
+        const BITMASKS: [usize; 32] = [
+            0x1, 0x3, 0x7, 0xf, 0x1f, 0x3f, 0x7f, 0xff, 0x1ff, 0x3ff, 0x7ff, 0xfff, 0x1fff, 0x3fff,
+            0x7fff, 0xffff, 0x1ffff, 0x3ffff, 0x7ffff, 0xfffff, 0x1fffff, 0x3fffff, 0x7fffff,
+            0xffffff, 0x1ffffff, 0x3ffffff, 0x7ffffff, 0xfffffff, 0x1fffffff, 0x3fffffff,
+            0x7fffffff, 0xffffffff,
+        ];
+
+        for i in (0..num_lens).step_by(2) {
+            bits_f |= self.get_bytes_as_usize_be(f, 4) >> (24 - bitpos_f);
+            f += (bitpos_f as usize + 7) >> 3;
+
+            bits_b |= self.get_bytes_as_usize_le(b - 1, 4) >> (24 - bitpos_b);
+            b -= (bitpos_b as usize + 7) >> 3;
+
+            let numbits_f = self.get_byte(interval_lenlog2 + i + 0);
+            let numbits_b = self.get_byte(interval_lenlog2 + i + 1);
+
+            bits_f = (bits_f | 1).rotate_left(numbits_f as _);
+            bitpos_f += numbits_f - 8 * ((bitpos_f + 7) >> 3);
+
+            bits_b = (bits_b | 1).rotate_left(numbits_b as _);
+            bitpos_b += numbits_b - 8 * ((bitpos_b + 7) >> 3);
+
+            let value_f = bits_f & BITMASKS[numbits_f as usize];
+            bits_f &= !BITMASKS[numbits_f as usize];
+
+            let value_b = bits_b & BITMASKS[numbits_b as usize];
+            bits_b &= !BITMASKS[numbits_b as usize];
+
+            decoded_intervals.push(value_f);
+            decoded_intervals.push(value_b);
+        }
+
+        // read final one since above loop reads 2
+        if (num_lens & 1) == 1 {
+            bits_f |= self.get_bytes_as_usize_be(f, 4) >> (24 - bitpos_f);
+            let numbits_f = self.get_byte(interval_lenlog2 + num_lens - 1);
+            bits_f = (bits_f | 1).rotate_left(numbits_f as _);
+            let value_f = bits_f & BITMASKS[numbits_f as usize];
+            decoded_intervals.push(value_f);
+        }
+
+        if self.get_as_bool(interval_indexes + num_indexes - 1) {
+            return None;
+        }
+
+        let mut indi = 0;
+        let mut leni = 0;
+        let increment_leni = (Q & 0x8000) != 0;
+
+        for arri in 0..array_count {
+            array_data.push(dst);
+            if indi >= num_indexes {
+                return None;
+            }
+
+            loop {
+                let source = self.get_as_usize(interval_indexes + indi);
+                if source == 0 {
+                    break;
+                }
+                indi += 1;
+                if source > num_arrays_in_file {
+                    return None;
+                }
+                if leni >= num_lens {
+                    return None;
+                }
+                let cur_len = decoded_intervals[leni];
+                leni += 1;
+                let bytes_left = entropy_array_size[source - 1];
+                if cur_len > bytes_left || cur_len > dst_end - dst {
+                    return None;
+                }
+                let blksrc = entropy_array_data[source - 1];
+                entropy_array_size[source - 1] -= cur_len;
+                entropy_array_data[source - 1] += cur_len;
+                let dstx = dst;
+                dst += cur_len;
+                self.memcpy(dstx, blksrc, cur_len);
+            }
+            if increment_leni {
+                leni += 1;
+            }
+            array_lens.push(dst - array_data[arri]);
+        }
+
+        if indi != num_indexes || leni != num_lens {
+            return None;
+        }
+
+        for i in 0..num_arrays_in_file {
+            if entropy_array_size[i] != 0 {
+                return None;
+            }
+        }
+        Some((
+            src_end_actual - src_org,
+            total_size_out,
+            array_data,
+            array_lens,
+        ))
+    }
+
+    fn Kraken_GetBlockSize(
+        &mut self,
+        src_org: Pointer,
+        src_end: Pointer,
+        dest_capacity: usize,
+    ) -> Option<usize> {
+        let mut src = src_org;
+        let src_size;
+        let dst_size;
+
+        if src_end - src < 2 {
+            return None;
+        } // too few bytes
+
+        let chunk_type = (self.get_byte(src) >> 4) & 0x7;
+        if chunk_type == 0 {
+            if self.get_byte(src) >= 0x80 {
+                // In this mode, memcopy stores the length in the bottom 12 bits.
+                src_size = self.get_bytes_as_usize_be(src, 2) & 0xFFF;
+                src += 2;
+            } else {
+                if src_end - src < 3 {
+                    return None;
+                } // too few bytes
+                src_size = self.get_bytes_as_usize_be(src, 3);
+                if (src_size & !0x3ffff) != 0 {
+                    return None;
+                } // reserved bits must not be set
+                src += 3;
+            }
+            if src_size > dest_capacity || src_end - src < src_size {
+                return None;
+            }
+            return Some(src_size);
+        }
+
+        if chunk_type >= 6 {
+            return None;
+        }
+
+        // In all the other modes, the initial bytes encode
+        // the src_size and the dst_size
+        if self.get_byte(src) >= 0x80 {
+            if src_end - src < 3 {
+                return None;
+            } // too few bytes
+
+            // short mode, 10 bit sizes
+            let bits = self.get_bytes_as_usize_be(src, 3);
+            src_size = bits & 0x3ff;
+            dst_size = src_size + ((bits >> 10) & 0x3ff) + 1;
+            src += 3;
+        } else {
+            // long mode, 18 bit sizes
+            if src_end - src < 5 {
+                return None;
+            } // too few bytes
+            let bits = self.get_bytes_as_usize_be(src, 5);
+            src_size = bits & 0x3ffff;
+            dst_size = (((bits >> 18) | (self.get_as_usize(src) << 14)) & 0x3FFFF) + 1;
+            if src_size >= dst_size {
+                return None;
+            }
+            src += 5;
+        }
+        if src_end - src < src_size || dst_size > dest_capacity {
+            return None;
+        }
+        Some(dst_size)
+    }
+
+    fn Kraken_DecodeBytes_Type12(
+        &mut self,
+        mut src: Pointer,
+        src_size: usize,
+        output: Pointer,
+        output_size: usize,
+        chunk_type: usize,
+    ) -> Option<usize> {
+        let half_output_size;
+        let split_left;
+        let split_mid;
+        let split_right;
+        let src_mid;
+        let src_end = src + src_size;
+
+        let mut bits = BitReader {
+            bitpos: 24,
+            bits: 0,
+            p: src,
+            p_end: src_end,
+        };
+        bits.Refill(self);
+
+        let mut code_prefix = BASE_PREFIX.clone();
+        let mut syms = [0; 1280];
+        let num_syms;
+        if !bits.ReadBitNoRefill() {
+            num_syms = self.Huff_ReadCodeLengthsOld(&mut bits, &mut syms, &mut code_prefix)?;
+        } else if !bits.ReadBitNoRefill() {
+            num_syms = self.Huff_ReadCodeLengthsNew(&mut bits, &mut syms, &mut code_prefix)?;
+        } else {
+            {
+                return None;
+            }
+        }
+        src = bits.p - ((24 - bits.bitpos) / 8);
+
+        if num_syms == 1 {
+            self.memset(output, syms[0], output_size);
+            return Some(src - src_end);
+        }
+
+        let rev_lut = HuffRevLut::make_lut(&code_prefix, &syms)?;
+
+        if chunk_type == 1 {
+            if src + 3 > src_end {
+                return None;
+            }
+            split_mid = self.get_bytes_as_usize_le(src, 2);
+            src += 2;
+            let mut hr = HuffReader {
+                output,
+                output_end: output + output_size,
+                src,
+                src_end,
+                src_mid_org: src + split_mid,
+                src_mid: src + split_mid,
+                ..Default::default()
+            };
+            if !hr.decode_bytes(self, &rev_lut) {
+                return None;
+            }
+        } else {
+            if src + 6 > src_end {
+                return None;
+            }
+
+            half_output_size = (output_size + 1) >> 1;
+            split_mid = self.get_bytes_as_usize_le(src, 3);
+            src += 3;
+            if split_mid > (src_end - src) {
+                return None;
+            }
+            src_mid = src + split_mid;
+            split_left = self.get_bytes_as_usize_le(src, 2);
+            src += 2;
+            if src_mid - src < split_left + 2 || src_end - src_mid < 3 {
+                return None;
+            }
+            split_right = self.get_bytes_as_usize_le(src_mid, 2);
+            if src_end - (src_mid + 2) < split_right + 2 {
+                return None;
+            }
+
+            let mut hr = HuffReader {
+                output,
+                output_end: output + half_output_size,
+                src,
+                src_end: src_mid,
+                src_mid_org: src + split_left,
+                src_mid: src + split_left,
+                ..Default::default()
+            };
+            if !hr.decode_bytes(self, &rev_lut) {
+                return None;
+            }
+
+            let mut hr = HuffReader {
+                output: output + half_output_size,
+                output_end: output + output_size,
+                src: src_mid + 2,
+                src_end,
+                src_mid_org: src_mid + 2 + split_right,
+                src_mid: src_mid + 2 + split_right,
+                ..Default::default()
+            };
+            if !hr.decode_bytes(self, &rev_lut) {
+                return None;
+            }
+        }
+        Some(src_size)
+    }
+
+    fn Huff_ReadCodeLengthsOld(
+        &mut self,
+        bits: &mut BitReader,
+        syms: &mut [u8; 1280],
+        code_prefix: &mut [usize; 12],
+    ) -> Option<i32> {
+        if bits.ReadBitNoRefill() {
+            let mut sym = 0;
+            let mut num_symbols = 0;
+            let mut avg_bits_x4 = 32;
+            let forced_bits = bits.ReadBitsNoRefill(2);
+
+            let thres_for_valid_gamma_bits = 1 << (31 - (20 >> forced_bits));
+            let mut skip_initial_zeros = bits.ReadBit(self);
+            while sym != 256 {
+                if skip_initial_zeros {
+                    skip_initial_zeros = false;
+                    // Run of zeros
+                    if (bits.bits & 0xff000000) != 0 {
+                        return None;
+                    }
+                    sym += bits.ReadBitsNoRefill(2 * (bits.high_bit() + 1)) - 2 + 1;
+                    if sym >= 256 {
+                        break;
+                    }
+                }
+                bits.Refill(self);
+                // Read out the gamma value for the # of symbols
+                if (bits.bits & 0xff000000) != 0 {
+                    return None;
+                }
+                let mut n = bits.ReadBitsNoRefill(2 * (bits.high_bit() + 1)) - 2 + 1;
+                // Overflow?
+                if sym + n > 256 {
+                    return None;
+                }
+                bits.Refill(self);
+                num_symbols += n;
+                loop {
+                    if bits.bits < thres_for_valid_gamma_bits {
+                        return None;
+                    } // too big gamma value?
+
+                    let lz = bits.high_bit();
+                    let v = bits.ReadBitsNoRefill(lz + forced_bits + 1) + ((lz - 1) << forced_bits);
+                    let codelen = (-(v & 1) ^ (v >> 1)) + ((avg_bits_x4 + 2) >> 2);
+                    if codelen < 1 || codelen > 11 {
+                        return None;
+                    }
+                    avg_bits_x4 = codelen + ((3 * avg_bits_x4 + 2) >> 2);
+                    bits.Refill(self);
+                    syms[code_prefix[usize::try_from(codelen).unwrap()]] = sym as _;
+                    code_prefix[usize::try_from(codelen).unwrap()] += 1;
+                    sym += 1;
+                    n -= 1;
+                    if n == 0 {
+                        break;
+                    }
+                }
+            }
+            if (sym == 256) && (num_symbols >= 2) {
+                Some(num_symbols)
+            } else {
+                None
+            }
+        } else {
+            // Sparse symbol encoding
+            let num_symbols = bits.ReadBitsNoRefill(8);
+            if num_symbols == 0 {
+                return None;
+            }
+            if num_symbols == 1 {
+                syms[0] = bits.ReadBitsNoRefill(8) as _;
+            } else {
+                let codelen_bits = bits.ReadBitsNoRefill(3);
+                if codelen_bits > 4 {
+                    return None;
+                }
+                for _ in 0..num_symbols {
+                    bits.Refill(self);
+                    let sym = bits.ReadBitsNoRefill(8) as u8;
+                    let codelen = bits.ReadBitsNoRefillZero(codelen_bits) + 1;
+                    if codelen > 11 {
+                        return None;
+                    }
+                    syms[code_prefix[usize::try_from(codelen).unwrap()]] = sym;
+                    code_prefix[usize::try_from(codelen).unwrap()] += 1;
+                }
+            }
+            Some(num_symbols)
+        }
+    }
+
+    fn Huff_ReadCodeLengthsNew(
+        &mut self,
+        bits: &mut BitReader,
+        syms: &mut [u8; 1280],
+        code_prefix: &mut [usize; 12],
+    ) -> Option<i32> {
+        let forced_bits = bits.ReadBitsNoRefill(2);
+
+        let num_symbols = bits.ReadBitsNoRefill(8) + 1;
+
+        let fluff = bits.ReadFluff(num_symbols);
+
+        let mut code_len = [0; 512];
+        let mut br2 = BitReader2 {
+            bitpos: ((bits.bitpos - 24) & 7) as u32,
+            p_end: bits.p_end,
+            p: bits.p - ((24 - bits.bitpos + 7) >> 3) as u32,
+        };
+
+        if !self.DecodeGolombRiceLengths(&mut code_len[..num_symbols as usize + fluff], &mut br2) {
+            return None;
+        }
+        if !self.DecodeGolombRiceBits(
+            &mut code_len[..usize::try_from(num_symbols).unwrap()],
+            forced_bits as u32,
+            &mut br2,
+        ) {
+            return None;
+        }
+
+        // Reset the bits decoder.
+        bits.bitpos = 24;
+        bits.p = br2.p;
+        bits.bits = 0;
+        bits.Refill(self);
+        bits.bits <<= br2.bitpos;
+        bits.bitpos += br2.bitpos as i32;
+
+        let mut running_sum = 0x1e;
+        for i in 0..num_symbols as _ {
+            let mut v = code_len[i];
+            v = (!(v & 1) + 1) ^ (v >> 1);
+            code_len[i] = v + (running_sum >> 2) + 1;
+            if code_len[i] < 1 || code_len[i] > 11 {
+                return None;
+            }
+            running_sum += v;
+        }
+
+        let ranges = self.Huff_ConvertToRanges(num_symbols as u16, fluff, &code_len, bits)?;
+
+        let mut cp = 0;
+        for range in ranges {
+            let mut sym = range.symbol;
+            for i in &code_len[cp..][..range.num as usize] {
+                syms[code_prefix[*i as usize]] = sym as u8;
+                code_prefix[*i as usize] += 1;
+                sym += 1;
+            }
+            cp += range.num as usize;
+        }
+
+        Some(num_symbols)
+    }
+
+    pub(crate) fn DecodeGolombRiceLengths(&self, mut dst: &mut [u8], br: &mut BitReader2) -> bool {
+        const K_RICE_CODE_BITS2VALUE: [u32; 256] = [
+            0x80000000, 0x00000007, 0x10000006, 0x00000006, 0x20000005, 0x00000105, 0x10000005,
+            0x00000005, 0x30000004, 0x00000204, 0x10000104, 0x00000104, 0x20000004, 0x00010004,
+            0x10000004, 0x00000004, 0x40000003, 0x00000303, 0x10000203, 0x00000203, 0x20000103,
+            0x00010103, 0x10000103, 0x00000103, 0x30000003, 0x00020003, 0x10010003, 0x00010003,
+            0x20000003, 0x01000003, 0x10000003, 0x00000003, 0x50000002, 0x00000402, 0x10000302,
+            0x00000302, 0x20000202, 0x00010202, 0x10000202, 0x00000202, 0x30000102, 0x00020102,
+            0x10010102, 0x00010102, 0x20000102, 0x01000102, 0x10000102, 0x00000102, 0x40000002,
+            0x00030002, 0x10020002, 0x00020002, 0x20010002, 0x01010002, 0x10010002, 0x00010002,
+            0x30000002, 0x02000002, 0x11000002, 0x01000002, 0x20000002, 0x00000012, 0x10000002,
+            0x00000002, 0x60000001, 0x00000501, 0x10000401, 0x00000401, 0x20000301, 0x00010301,
+            0x10000301, 0x00000301, 0x30000201, 0x00020201, 0x10010201, 0x00010201, 0x20000201,
+            0x01000201, 0x10000201, 0x00000201, 0x40000101, 0x00030101, 0x10020101, 0x00020101,
+            0x20010101, 0x01010101, 0x10010101, 0x00010101, 0x30000101, 0x02000101, 0x11000101,
+            0x01000101, 0x20000101, 0x00000111, 0x10000101, 0x00000101, 0x50000001, 0x00040001,
+            0x10030001, 0x00030001, 0x20020001, 0x01020001, 0x10020001, 0x00020001, 0x30010001,
+            0x02010001, 0x11010001, 0x01010001, 0x20010001, 0x00010011, 0x10010001, 0x00010001,
+            0x40000001, 0x03000001, 0x12000001, 0x02000001, 0x21000001, 0x01000011, 0x11000001,
+            0x01000001, 0x30000001, 0x00000021, 0x10000011, 0x00000011, 0x20000001, 0x00001001,
+            0x10000001, 0x00000001, 0x70000000, 0x00000600, 0x10000500, 0x00000500, 0x20000400,
+            0x00010400, 0x10000400, 0x00000400, 0x30000300, 0x00020300, 0x10010300, 0x00010300,
+            0x20000300, 0x01000300, 0x10000300, 0x00000300, 0x40000200, 0x00030200, 0x10020200,
+            0x00020200, 0x20010200, 0x01010200, 0x10010200, 0x00010200, 0x30000200, 0x02000200,
+            0x11000200, 0x01000200, 0x20000200, 0x00000210, 0x10000200, 0x00000200, 0x50000100,
+            0x00040100, 0x10030100, 0x00030100, 0x20020100, 0x01020100, 0x10020100, 0x00020100,
+            0x30010100, 0x02010100, 0x11010100, 0x01010100, 0x20010100, 0x00010110, 0x10010100,
+            0x00010100, 0x40000100, 0x03000100, 0x12000100, 0x02000100, 0x21000100, 0x01000110,
+            0x11000100, 0x01000100, 0x30000100, 0x00000120, 0x10000110, 0x00000110, 0x20000100,
+            0x00001100, 0x10000100, 0x00000100, 0x60000000, 0x00050000, 0x10040000, 0x00040000,
+            0x20030000, 0x01030000, 0x10030000, 0x00030000, 0x30020000, 0x02020000, 0x11020000,
+            0x01020000, 0x20020000, 0x00020010, 0x10020000, 0x00020000, 0x40010000, 0x03010000,
+            0x12010000, 0x02010000, 0x21010000, 0x01010010, 0x11010000, 0x01010000, 0x30010000,
+            0x00010020, 0x10010010, 0x00010010, 0x20010000, 0x00011000, 0x10010000, 0x00010000,
+            0x50000000, 0x04000000, 0x13000000, 0x03000000, 0x22000000, 0x02000010, 0x12000000,
+            0x02000000, 0x31000000, 0x01000020, 0x11000010, 0x01000010, 0x21000000, 0x01001000,
+            0x11000000, 0x01000000, 0x40000000, 0x00000030, 0x10000020, 0x00000020, 0x20000010,
+            0x00001010, 0x10000010, 0x00000010, 0x30000000, 0x00002000, 0x10001000, 0x00001000,
+            0x20000000, 0x00100000, 0x10000000, 0x00000000,
+        ];
+
+        const K_RICE_CODE_BITS2LEN: [u8; 256] = [
+            0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3,
+            4, 4, 5, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4,
+            4, 5, 4, 5, 5, 6, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5, 2, 3, 3, 4, 3, 4, 4,
+            5, 3, 4, 4, 5, 4, 5, 5, 6, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5,
+            4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5, 2,
+            3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5,
+            5, 6, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4,
+            5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 3, 4, 4, 5, 4, 5, 5, 6,
+            4, 5, 5, 6, 5, 6, 6, 7, 4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8,
+        ];
+
+        let mut p = br.p;
+        let p_end = br.p_end;
+        if p >= p_end {
+            return false;
+        }
+
+        let mut count = -(br.bitpos as i32);
+        let mut v = self.get_as_usize(p) & (255 >> br.bitpos);
+        p += 1;
+        loop {
+            if v == 0 {
+                count += 8;
+            } else {
+                let x = K_RICE_CODE_BITS2VALUE[v] as i32;
+                let bytes = [
+                    (count + (x & 0x0f0f0f0f)).to_le_bytes(),
+                    ((x >> 4) & 0x0f0f0f0f).to_le_bytes(),
+                ]
+                .concat();
+                if bytes.len() > dst.len() {
+                    dst.copy_from_slice(&bytes[..dst.len()]);
+                } else {
+                    dst[..8].copy_from_slice(&bytes);
+                }
+                let step = K_RICE_CODE_BITS2LEN[v] as usize;
+                if dst.len() > step {
+                    // went too far, step back
+                    for _ in dst.len()..step {
+                        v &= v - 1;
+                    }
+                } else if dst.len() == step {
+                    break;
+                }
+                dst = &mut dst[step..];
+                count = x >> 28;
+            }
+            if p >= p_end {
+                return false;
+            }
+            v = self.get_byte(p) as _;
+            p += 1;
+        }
+        // step back if byte not finished
+        let mut bitpos = 0;
+        if (v & 1) != 0 {
+            p -= 1;
+            bitpos = 8 - v.trailing_zeros();
+        }
+        br.p = p;
+        br.bitpos = bitpos;
+        true
+    }
+
+    fn DecodeGolombRiceBits(&self, mut dst: &mut [u8], bitcount: u32, br: &mut BitReader2) -> bool {
+        if bitcount == 0 {
+            return true;
+        }
+        let mut p = br.p;
+        let bitpos = br.bitpos;
+
+        let bits_required = ((bitpos + bitcount) as usize) * dst.len();
+        let bytes_required = (bits_required + 7) >> 3;
+        if bytes_required > br.p_end - p {
+            return false;
+        }
+
+        br.p = p + (bits_required >> 3);
+        br.bitpos = (bits_required & 7) as u32;
+
+        while !dst.is_empty() {
+            let bits = match bitcount {
+                1 => {
+                    // Read the next byte
+                    let mut bits =
+                        ((self.get_bytes_as_usize_be(p, 4) >> (24 - bitpos)) & 0xFF) as u64;
+                    p += 1;
+                    // Expand each bit into each byte of the uint64.
+                    bits = (bits | (bits << 28)) & 0xF0000000F;
+                    bits = (bits | (bits << 14)) & 0x3000300030003;
+                    bits = (bits | (bits << 7)) & 0x0101010101010101;
+                    bits
+                }
+                2 => {
+                    // Read the next 2 bytes
+                    let mut bits =
+                        ((self.get_bytes_as_usize_be(p, 4) >> (16 - bitpos)) & 0xFFFF) as u64;
+                    p += 2;
+                    // Expand each bit into each byte of the uint64.
+                    bits = (bits | (bits << 24)) & 0xFF000000FF;
+                    bits = (bits | (bits << 12)) & 0xF000F000F000F;
+                    bits = (bits | (bits << 6)) & 0x0303030303030303;
+                    bits
+                }
+                3 => {
+                    // Read the next 3 bytes
+                    let mut bits =
+                        ((self.get_bytes_as_usize_be(p, 4) >> (8 - bitpos)) & 0xffffff) as u64;
+                    p += 3;
+                    // Expand each bit into each byte of the uint64.
+                    bits = (bits | (bits << 20)) & 0xFFF00000FFF;
+                    bits = (bits | (bits << 10)) & 0x3F003F003F003F;
+                    bits = (bits | (bits << 5)) & 0x0707070707070707;
+                    bits
+                }
+                _ => panic!(),
+            };
+            let len = dst.len().max(8);
+            let mut bytes = dst[..len].to_vec();
+            bytes.resize(8, 0);
+            let v = (u64::from_le_bytes(bytes.try_into().unwrap()) << bitcount) + bits.swap_bytes();
+            dst.copy_from_slice(&v.to_le_bytes()[..len]);
+            dst = &mut dst[len..];
+        }
+        true
+    }
+
+    pub(crate) fn Huff_ConvertToRanges(
+        &self,
+        num_symbols: u16,
+        p: usize,
+        symlen: &[u8],
+        bits: &mut BitReader,
+    ) -> Option<Vec<HuffRange>> {
+        let mut symbol = 0;
+        let mut idx = 0;
+
+        // Start with space?
+        if p & 1 != 0 {
+            bits.Refill(self);
+            let v = symlen[idx] as i32;
+            idx += 1;
+            if v >= 8 {
+                return None;
+            }
+            symbol = u16::try_from(bits.ReadBitsNoRefill(v + 1) + (1 << (v + 1)) - 1).unwrap();
+        }
+
+        let mut syms_used = 0;
+        let num_ranges = usize::try_from(p >> 1).unwrap();
+        let mut ranges: Vec<HuffRange> = Vec::with_capacity(num_ranges + 1);
+
+        for _ in 0..num_ranges {
+            bits.Refill(self);
+            let v = symlen[idx] as i32;
+            idx += 1;
+            if v >= 9 {
+                return None;
+            }
+            let num = u16::try_from(bits.ReadBitsNoRefillZero(v) + (1 << v)).unwrap();
+            let v = symlen[idx] as i32;
+            idx += 1;
+            if v >= 8 {
+                return None;
+            }
+            let space = u16::try_from(bits.ReadBitsNoRefill(v + 1) + (1 << (v + 1)) - 1).unwrap();
+            ranges.push(HuffRange { symbol, num });
+            syms_used += num;
+            symbol += num + space;
+        }
+
+        if symbol >= 256 || syms_used >= num_symbols || symbol + num_symbols - syms_used > 256 {
+            return None;
+        }
+
+        ranges.push(HuffRange {
+            symbol,
+            num: num_symbols - syms_used,
+        });
+
+        Some(ranges)
     }
 
     fn Kraken_ReadLzTable(
@@ -704,9 +1627,6 @@ impl KrakenDecoder {
             scratch,
             scratch_end,
         );
-        if n < 0 {
-            return None;
-        }
         src += n;
         let mut lz = KrakenLzTable {
             lit_stream: out,
@@ -727,9 +1647,6 @@ impl KrakenDecoder {
             scratch,
             scratch_end,
         );
-        if n < 0 {
-            return None;
-        }
         src += n;
         lz.cmd_stream = out;
         lz.cmd_stream_size = decode_count;
@@ -759,9 +1676,6 @@ impl KrakenDecoder {
                 scratch,
                 scratch_end,
             );
-            if n < 0 {
-                return None;
-            }
             src += n;
             scratch += lz.offs_stream_size;
 
@@ -777,7 +1691,7 @@ impl KrakenDecoder {
                     scratch,
                     scratch_end,
                 );
-                if n < 0 || decode_count != lz.offs_stream_size {
+                if decode_count != lz.offs_stream_size {
                     return None;
                 }
                 src += n;
@@ -796,9 +1710,6 @@ impl KrakenDecoder {
                 scratch,
                 scratch_end,
             );
-            if n < 0 {
-                return None;
-            }
             src += n;
             scratch += lz.offs_stream_size;
         }
@@ -815,9 +1726,6 @@ impl KrakenDecoder {
             scratch,
             scratch_end,
         );
-        if n < 0 {
-            return None;
-        }
         src += n;
         scratch += lz.len_stream_size;
 
@@ -848,12 +1756,11 @@ impl KrakenDecoder {
             packed_len_stream,
             packed_len_stream_size,
             false,
-            0,
         ) {
             return None;
         }
 
-        return Some(lz);
+        Some(lz)
     }
 
     // Unpacks the packed 8 bit offset and lengths into 32 bit.
@@ -869,10 +1776,8 @@ impl KrakenDecoder {
         packed_litlen_stream: Pointer,
         packed_litlen_stream_size: usize,
         excess_flag: bool,
-        excess_bytes: i32,
     ) -> bool {
         let mut n;
-        let mut i;
         let mut u32_len_stream_size = 0;
 
         let mut bits_a = BitReader {
@@ -895,7 +1800,7 @@ impl KrakenDecoder {
             if bits_b.bits < 0x2000 {
                 return false;
             }
-            n = bits_b.bits.ilog2();
+            n = bits_b.high_bit();
             bits_b.bitpos += n;
             bits_b.bits <<= n;
             bits_b.RefillBackwards(self);
@@ -910,27 +1815,20 @@ impl KrakenDecoder {
             // Traditional way of coding offsets
             let packed_offs_stream_end = packed_offs_stream + packed_offs_stream_size;
             while packed_offs_stream != packed_offs_stream_end {
-                self.set_int(
-                    lz.offs_stream,
-                    -i32::try_from(bits_a.ReadDistance(self, self.get_as_u32(packed_offs_stream)))
-                        .unwrap(),
-                );
+                let d_a = bits_a.ReadDistance(self, self.get_byte(packed_offs_stream).into());
+                self.set_int(lz.offs_stream, -d_a);
                 lz.offs_stream += 1;
                 packed_offs_stream += 1;
                 if packed_offs_stream == packed_offs_stream_end {
                     break;
                 }
-                self.set_int(
-                    lz.offs_stream,
-                    -i32::try_from(bits_b.ReadDistanceB(self, self.get_as_u32(packed_offs_stream)))
-                        .unwrap(),
-                );
+                let d_b = bits_b.ReadDistanceB(self, self.get_byte(packed_offs_stream).into());
+                self.set_int(lz.offs_stream, -d_b);
                 lz.offs_stream += 1;
                 packed_offs_stream += 1;
             }
         } else {
             // New way of coding offsets
-            let mut offs_stream_org = lz.offs_stream;
             let packed_offs_stream_end = packed_offs_stream + packed_offs_stream_size;
             let mut cmd;
             let mut offs;
@@ -946,26 +1844,25 @@ impl KrakenDecoder {
                 if packed_offs_stream == packed_offs_stream_end {
                     break;
                 }
-                cmd = self.get_as_u32(packed_offs_stream);
+                cmd = i32::from(self.get_byte(packed_offs_stream));
                 packed_offs_stream += 1;
                 if (cmd >> 3) > 26 {
                     return false;
                 }
-                offs = ((8 + (cmd & 7)) << (cmd >> 3))
-                    | bits_b.ReadMoreThan24BitsB(&mut self, cmd >> 3);
-                self.set_int(lz.offs_stream, 8 - offs.try_into().unwrap());
+                offs = ((8 + (cmd & 7)) << (cmd >> 3)) | bits_b.ReadMoreThan24BitsB(self, cmd >> 3);
+                self.set_int(lz.offs_stream, 8 - offs);
                 lz.offs_stream += 1;
             }
             if multi_dist_scale != 1 {
                 self.CombineScaledOffsetArrays(
-                    &offs_stream_org,
-                    lz.offs_stream - offs_stream_org,
+                    &lz.offs_stream,
+                    lz.offs_stream - lz.offs_stream,
                     multi_dist_scale,
                     &packed_offs_stream_extra,
                 );
             }
         }
-        let u32_len_stream_buf = [0u32; 512]; // max count is 128kb / 256 = 512
+        let mut u32_len_stream_buf = [0i32; 512]; // max count is 128kb / 256 = 512
         if u32_len_stream_size > 512 {
             return false;
         }
@@ -973,38 +1870,38 @@ impl KrakenDecoder {
         let mut u32_len_stream = 0;
         for i in 0usize..u32_len_stream_size.try_into().unwrap() {
             if i % 2 == 0 {
-                if let Some(v) = bits_a.ReadLength(&mut self) {
+                if let Some(v) = bits_a.ReadLength(self) {
                     u32_len_stream_buf[i] = v
                 } else {
                     return false;
                 }
-            } else if let Some(v) = bits_b.ReadLengthB(&mut self) {
+            } else if let Some(v) = bits_b.ReadLengthB(self) {
                 u32_len_stream_buf[i] = v
             } else {
                 return false;
             }
         }
 
-        bits_a.p -= (24 - bits_a.bitpos.try_into().unwrap()) >> 3;
-        bits_b.p += (24 - bits_b.bitpos.try_into().unwrap()) >> 3;
+        bits_a.p -= (24 - bits_a.bitpos) >> 3;
+        bits_b.p += (24 - bits_b.bitpos) >> 3;
 
         if bits_a.p != bits_b.p {
             return false;
         }
 
         for i in 0..packed_litlen_stream_size {
-            let v = self.get_as_u32(packed_litlen_stream + i);
+            let mut v = i32::from(self.get_byte(packed_litlen_stream + i));
             if v == 255 {
                 v = u32_len_stream_buf[u32_len_stream] + 255;
                 u32_len_stream += 1;
             }
-            self.set_int(lz.len_stream + i, (v + 3).try_into().unwrap());
+            self.set_int(lz.len_stream + i, v + 3);
         }
         if u32_len_stream != u32_len_stream_buf.len() {
             return false;
         }
 
-        return true;
+        true
     }
 
     fn CombineScaledOffsetArrays(
@@ -1015,7 +1912,8 @@ impl KrakenDecoder {
         low_bits: &Pointer,
     ) {
         for i in 0..offs_stream_size {
-            let scaled = scale * self.get_int(offs_stream + i) + self.get_byte(low_bits + i).into();
+            let scaled =
+                scale * self.get_int(offs_stream + i) + i32::from(self.get_byte(low_bits + i));
             self.set_int(offs_stream + i, scaled)
         }
     }
@@ -1046,7 +1944,7 @@ impl KrakenDecoder {
             );
         }
 
-        return false;
+        false
     }
 
     // Note: may access memory out of bounds on invalid input.
@@ -1067,8 +1965,8 @@ impl KrakenDecoder {
         let mut copyfrom;
         let final_len;
         let mut offset;
-        let mut recent_offs: [isize; 7] = [0; 7];
-        let mut last_offset: isize;
+        let mut recent_offs: [i32; 7] = [0; 7];
+        let mut last_offset: i32;
 
         recent_offs[3] = -8;
         recent_offs[4] = -8;
@@ -1136,7 +2034,7 @@ impl KrakenDecoder {
         }
 
         self.copy_add(dst, lit_stream, dst + last_offset, final_len);
-        return true;
+        true
     }
 
     // Note: may access memory out of bounds on invalid input.
@@ -1222,12 +2120,25 @@ impl KrakenDecoder {
         }
 
         self.memmove(dst, lit_stream, final_len);
-        return true;
+        true
     }
 }
 
-impl KrakenDecoder {
-    fn get_byte(&self, p: Pointer) -> u8 {
+pub struct KrakenDecoder<'a> {
+    pub input: &'a [u8],
+    pub output: &'a mut [u8],
+    pub scratch: Vec<u8>,
+}
+
+impl KrakenDecoder<'_> {
+    pub fn new<'a>(input: &'a [u8], output: &'a mut [u8]) -> KrakenDecoder<'a> {
+        KrakenDecoder {
+            input,
+            output,
+            scratch: Vec::new(),
+        }
+    }
+    pub fn get_byte(&self, p: Pointer) -> u8 {
         match p.into {
             PointerDest::Null => panic!(),
             PointerDest::Input => self.input[p.index],
@@ -1235,25 +2146,33 @@ impl KrakenDecoder {
             PointerDest::Scratch => self.scratch[p.index],
         }
     }
-    fn get_as_usize(&self, p: Pointer) -> usize {
-        match p.into {
+    pub fn get_as_usize(&self, p: Pointer) -> usize {
+        self.get_byte(p) as usize
+    }
+    pub fn get_as_bool(&self, p: Pointer) -> bool {
+        self.get_byte(p) != 0
+    }
+    pub fn get_slice(&self, p: Pointer, n: usize) -> &[u8] {
+        &match p.into {
             PointerDest::Null => panic!(),
-            PointerDest::Input => usize::from(self.input[p.index]),
-            PointerDest::Output => usize::from(self.output[p.index]),
-            PointerDest::Scratch => usize::from(self.scratch[p.index]),
+            PointerDest::Input => &self.input[p.index..p.index + n],
+            PointerDest::Output => &self.output[p.index..p.index + n],
+            PointerDest::Scratch => &self.scratch[p.index..p.index + n],
         }
     }
-
-    fn get_as_u32(&self, p: Pointer) -> u32 {
-        match p.into {
-            PointerDest::Null => panic!(),
-            PointerDest::Input => u32::from(self.input[p.index]),
-            PointerDest::Output => u32::from(self.output[p.index]),
-            PointerDest::Scratch => u32::from(self.scratch[p.index]),
-        }
+    pub fn get_bytes_as_usize_le(&self, p: Pointer, n: usize) -> usize {
+        let mut bytes = [0; std::mem::size_of::<usize>()];
+        bytes[..n].copy_from_slice(self.get_slice(p, n));
+        usize::from_le_bytes(bytes)
+    }
+    pub fn get_bytes_as_usize_be(&self, p: Pointer, n: usize) -> usize {
+        const B: usize = std::mem::size_of::<usize>();
+        let mut bytes = [0; B];
+        bytes[B - n..].copy_from_slice(self.get_slice(p, n));
+        usize::from_le_bytes(bytes)
     }
 
-    fn get_int(&self, p: IntPointer) -> i32 {
+    pub fn get_int(&self, p: IntPointer) -> i32 {
         match p.into {
             PointerDest::Null => panic!(),
             PointerDest::Input => {
@@ -1268,21 +2187,19 @@ impl KrakenDecoder {
         }
     }
 
-    fn set(&mut self, p: Pointer, v: u8) {
+    pub fn set(&mut self, p: Pointer, v: u8) {
         match p.into {
             PointerDest::Null => panic!(),
-            PointerDest::Input => self.input[p.index] = v,
+            PointerDest::Input => panic!(),
             PointerDest::Output => self.output[p.index] = v,
             PointerDest::Scratch => self.scratch[p.index] = v,
         }
     }
 
-    fn set_int(&mut self, p: IntPointer, v: i32) {
+    pub fn set_int(&mut self, p: IntPointer, v: i32) {
         match p.into {
             PointerDest::Null => panic!(),
-            PointerDest::Input => {
-                self.input[p.index..p.index + 4].copy_from_slice(&v.to_le_bytes())
-            }
+            PointerDest::Input => panic!(),
             PointerDest::Output => {
                 self.output[p.index..p.index + 4].copy_from_slice(&v.to_le_bytes())
             }
@@ -1292,42 +2209,51 @@ impl KrakenDecoder {
         }
     }
 
-    fn copy_64(&mut self, dest: Pointer, src: Pointer) {
+    pub fn set_bytes(&mut self, p: Pointer, v: &[u8]) {
+        match p.into {
+            PointerDest::Null => panic!(),
+            PointerDest::Input => panic!(),
+            PointerDest::Output => self.output[p.index..p.index + v.len()].copy_from_slice(v),
+            PointerDest::Scratch => self.scratch[p.index..p.index + v.len()].copy_from_slice(v),
+        }
+    }
+
+    pub fn copy_64(&mut self, dest: Pointer, src: Pointer) {
         self.memmove(dest, src, 8)
     }
 
-    fn copy_64_bytes(&mut self, dest: Pointer, src: Pointer) {
+    pub fn copy_64_bytes(&mut self, dest: Pointer, src: Pointer) {
         self.memmove(dest, src, 64)
     }
 
-    fn copy_add(&mut self, dst: Pointer, lhs: Pointer, rhs: Pointer, n: usize) {
+    pub fn copy_add(&mut self, dst: Pointer, lhs: Pointer, rhs: Pointer, n: usize) {
         for i in 0..n {
             self.set(dst + i, self.get_byte(lhs) + self.get_byte(rhs))
         }
     }
 
-    fn memmove(&mut self, dest: Pointer, src: Pointer, n: usize) {
+    pub fn memcpy(&mut self, dest: Pointer, src: Pointer, n: usize) {
+        self.memmove(dest, src, n)
+    }
+
+    pub fn memmove(&mut self, dest: Pointer, src: Pointer, n: usize) {
         if dest.into == src.into {
             if dest.index != src.index {
                 match dest.into {
                     PointerDest::Null => panic!(),
-                    PointerDest::Input => &mut self.input,
-                    PointerDest::Output => &mut self.output,
-                    PointerDest::Scratch => &mut self.scratch,
+                    PointerDest::Input => panic!(),
+                    PointerDest::Output => self
+                        .output
+                        .copy_within(src.index..src.index + n, dest.index),
+                    PointerDest::Scratch => self
+                        .scratch
+                        .copy_within(src.index..src.index + n, dest.index),
                 }
-                .copy_within(src.index..src.index + n, dest.index)
             }
         } else {
             match dest.into {
                 PointerDest::Null => panic!(),
-                PointerDest::Input => {
-                    self.input[dest.index..dest.index + n].copy_from_slice(match src.into {
-                        PointerDest::Null => panic!(),
-                        PointerDest::Input => panic!(),
-                        PointerDest::Output => &self.output[src.index..src.index + n],
-                        PointerDest::Scratch => &self.scratch[src.index..src.index + n],
-                    })
-                }
+                PointerDest::Input => panic!(),
                 PointerDest::Output => {
                     self.output[dest.index..dest.index + n].copy_from_slice(match src.into {
                         PointerDest::Null => panic!(),
@@ -1347,10 +2273,16 @@ impl KrakenDecoder {
             }
         }
     }
-}
 
-fn align_16(x: usize) -> usize {
-    (x + 15) & !15
+    pub fn memset(&mut self, p: Pointer, v: u8, n: usize) {
+        match p.into {
+            PointerDest::Null => panic!(),
+            PointerDest::Input => panic!(),
+            PointerDest::Output => &mut self.output[p.index..p.index + n],
+            PointerDest::Scratch => &mut self.scratch[p.index..p.index + n],
+        }
+        .fill(v);
+    }
 }
 
 fn align_pointer(p: Pointer, align: usize) -> Pointer {
