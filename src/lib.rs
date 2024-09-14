@@ -1,4 +1,5 @@
 pub mod bit_reader;
+//pub mod error;
 pub mod huffman;
 pub mod kraken;
 pub mod tans;
@@ -10,7 +11,7 @@ use std::panic::Location;
 pub use kraken::*;
 
 #[derive(Debug)]
-enum DecoderType {
+pub enum DecoderType {
     Lzna = 0x5,
     Kraken = 0x6,
     Mermaid = 0xA,
@@ -20,18 +21,18 @@ enum DecoderType {
 
 /// Header in front of each 256k block
 #[derive(Debug)]
-struct BlockHeader {
+pub struct BlockHeader {
     /// Type of decoder used
-    decoder_type: DecoderType,
+    pub decoder_type: DecoderType,
 
     /// Whether to restart the decoder
-    restart_decoder: bool,
+    pub restart_decoder: bool,
 
     /// Whether this block is uncompressed
-    uncompressed: bool,
+    pub uncompressed: bool,
 
     /// Whether this block uses checksums.
-    use_checksums: bool,
+    pub use_checksums: bool,
 }
 
 const SMALL_BLOCK: usize = 0x4000;
@@ -49,7 +50,7 @@ impl BlockHeader {
 
 /// Additional header in front of each large or small block ("quantum").
 #[derive(Debug)]
-enum QuantumHeader {
+pub enum QuantumHeader {
     Compressed {
         /// The compressed size of this quantum. If this value is 0 it means
         /// the quantum is a special quantum such as memset.
@@ -82,10 +83,10 @@ impl<In: Read + Seek> Read for Extractor<In> {
         let header = &mut [0u8, 0u8];
         while bytes_written < buf.len() {
             log::debug!(
-                "read: {:?}, written: {}, remaining: {}",
+                "read: {:?}, written: {}, buffer size: {}",
                 self.input.stream_position()?,
                 bytes_written,
-                buf.len() - bytes_written
+                buf.len()
             );
             if (bytes_written & 0x3FFFF) == 0 {
                 match self.input.read_exact(header) {
@@ -101,12 +102,12 @@ impl<In: Read + Seek> Read for Extractor<In> {
             log::debug!("Parsed header {:?}", header);
             match self.extract(buf, bytes_written, header) {
                 Ok(0) => {
-                    if bytes_written > 0 {
+                    return if bytes_written > 0 {
                         log::debug!("Input empty. Wrote {} bytes", bytes_written);
-                        return Ok(bytes_written);
+                        Ok(bytes_written)
                     } else {
                         log::debug!("Write zero. Wrote {} bytes", bytes_written);
-                        return self.io_error(ErrorKind::WriteZero, bytes_written);
+                        self.io_error(ErrorKind::WriteZero, bytes_written)
                     }
                 }
                 Ok(count) => {
@@ -155,10 +156,7 @@ impl<In: Read + Seek> Extractor<In> {
         log::debug!("Parsed quantum {:?}", quantum);
         match quantum {
             QuantumHeader::Compressed {
-                compressed_size,
-                checksum,
-                flag1,
-                flag2,
+                compressed_size, ..
             } => {
                 let input = &mut self.tmp[..compressed_size];
                 self.input.read_exact(input)?;
@@ -354,8 +352,12 @@ mod tests {
         let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         d.push("testdata");
         for path in fs::read_dir(d).unwrap() {
+            let path = path.unwrap().path();
+            if !path.to_str().unwrap().contains(".kraken") {
+                continue;
+            }
             log::info!("Extracting {:?}", path);
-            let mut file = fs::File::open(path.unwrap().path()).unwrap();
+            let mut file = fs::File::open(path).unwrap();
             let mut buf = [0; 8];
             file.read_exact(&mut buf).unwrap();
             log::debug!("header {:?}", buf);

@@ -24,7 +24,7 @@ pub struct HuffReader {
 }
 
 impl HuffReader {
-    pub(crate) fn decode_bytes(&mut self, mem: &mut KrakenDecoder, lut: &HuffRevLut) -> bool {
+    pub fn decode_bytes(&mut self, mem: &mut KrakenDecoder, lut: &HuffRevLut) {
         let mut src = self.src;
         let mut src_bits = self.src_bits;
         let mut src_bitpos = self.src_bitpos;
@@ -43,9 +43,7 @@ impl HuffReader {
         let mut dst = self.output;
         let mut dst_end = self.output_end;
 
-        if src > src_mid {
-            return false;
-        }
+        assert!(src <= src_mid, "{:?} > {:?}", src, src_mid);
 
         if self.src_end - src_mid >= 4 && dst_end - dst >= 6 {
             dst_end -= 5;
@@ -160,11 +158,11 @@ impl HuffReader {
                     src_mid_bitpos &= 7;
                 }
             }
-            if src > src_mid || src_mid > src_end {
-                return false;
-            }
+            assert!(src <= src_mid, "{:?} > {:?}", src, src_mid);
+            assert!(src_mid <= src_end, "{:?} > {:?}", src_mid, src_end);
         }
-        !(src != self.src_mid_org || src_end != src_mid)
+        assert_eq!(src, self.src_mid_org);
+        assert_eq!(src_end, src_mid);
     }
 }
 
@@ -194,11 +192,11 @@ impl HuffRevLut {
                 if currslot + num_to_set > 2048 {
                     return None;
                 }
-                bits2len[currslot..currslot + 1].fill(i);
+                bits2len[currslot..][..num_to_set].fill(i);
 
                 for j in 0..count {
-                    let dst = currslot + stepsize * count;
-                    bits2sym[dst..dst + stepsize].fill(syms[start + j])
+                    let dst = currslot + stepsize * j;
+                    bits2sym[dst..][..stepsize].fill(syms[start + j])
                 }
                 currslot += num_to_set;
             }
@@ -208,8 +206,8 @@ impl HuffRevLut {
             if currslot + num_to_set > 2048 {
                 return None;
             }
-            bits2len[currslot..currslot + num_to_set].fill(11);
-            bits2sym[currslot..currslot + num_to_set]
+            bits2len[currslot..][..num_to_set].fill(11);
+            bits2sym[currslot..][..num_to_set]
                 .copy_from_slice(&syms[BASE_PREFIX[11]..][..num_to_set]);
             currslot += num_to_set;
         }

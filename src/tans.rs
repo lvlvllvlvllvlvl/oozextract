@@ -5,7 +5,7 @@ use crate::{KrakenDecoder, Pointer};
 pub struct TansDecoder {
     pub lut: Vec<TansLutEnt>,
     pub dst: Pointer,
-    pub(crate) dst_end: Pointer,
+    pub dst_end: Pointer,
     pub ptr_f: Pointer,
     pub ptr_b: Pointer,
     pub bits_f: usize,
@@ -16,10 +16,13 @@ pub struct TansDecoder {
 }
 
 impl TansDecoder {
-    pub fn decode(&mut self, core: &mut KrakenDecoder) -> bool {
-        if self.ptr_f > self.ptr_b {
-            return false;
-        }
+    pub fn decode(&mut self, core: &mut KrakenDecoder) {
+        assert!(
+            self.ptr_f <= self.ptr_b,
+            "{:?} > {:?}",
+            self.ptr_f,
+            self.ptr_b
+        );
 
         let mut step = 0;
         while self.dst < self.dst_end {
@@ -37,18 +40,15 @@ impl TansDecoder {
             step = (step + 1) % 10;
         }
 
-        if self.ptr_b + (self.bitpos_f >> 3) + (self.bitpos_b >> 3) != self.ptr_f {
-            return false;
-        }
+        assert_eq!(
+            self.ptr_b + (self.bitpos_f >> 3) + (self.bitpos_b >> 3),
+            self.ptr_f
+        );
 
         let states_or = self.state.iter().map(|v| *v).reduce(|l, r| l | r).unwrap();
-        if (states_or & !0xFF) != 0 {
-            return false;
-        }
+        assert_eq!(states_or & !0xFF, 0, "{:X}", states_or);
 
         core.set_bytes(self.dst_end, &self.state.map(|s| s as u8));
-
-        true
     }
 
     fn tans_forward_bits(&mut self, core: &mut KrakenDecoder) {
@@ -117,7 +117,7 @@ impl TansDecoder {
             let weight = tans_data.b[i] & 0xffff;
             let symbol = tans_data.b[i] >> 16;
             if weight > 4 {
-                let sym_bits = weight.leading_zeros();
+                let sym_bits = weight.ilog2();
                 let mut z = l_bits - sym_bits;
                 let mut le = TansLutEnt::default();
                 le.symbol = symbol as u8;
@@ -171,7 +171,7 @@ impl TansDecoder {
                     let dst = pointers[idx];
                     pointers[idx] += 1;
                     lut[dst].symbol = symbol as u8;
-                    let weight_bits = ww.leading_zeros();
+                    let weight_bits = ww.ilog2();
                     lut[dst].bits_x = (l_bits - weight_bits) as u8;
                     lut[dst].x = (1 << (l_bits - weight_bits)) - 1;
                     lut[dst].w = ((l - 1) & (ww << (l_bits - weight_bits))) as u16;
@@ -287,7 +287,7 @@ impl TansDecoder {
 
             let count = bits.ReadBitsNoRefill(3) + 1;
 
-            let bits_per_sym = l_bits.leading_zeros() + 1;
+            let bits_per_sym = l_bits.ilog2() + 1;
             let max_delta_bits = bits.ReadBitsNoRefill(bits_per_sym as i32);
 
             if max_delta_bits == 0 || max_delta_bits > l_bits {

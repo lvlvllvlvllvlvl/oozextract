@@ -66,9 +66,11 @@ impl BitReader {
 
     // Read |n| bits without refilling.
     pub fn ReadBitsNoRefill(&mut self, n: i32) -> i32 {
+        //log::debug!("bits: {:X}", self.bits);
         let r = self.bits >> (32 - n);
         self.bits <<= n;
         self.bitpos += n;
+        //log::debug!("read: {:X}", r);
         r as _
     }
 
@@ -111,7 +113,7 @@ impl BitReader {
     pub fn ReadGamma(&mut self) -> i32 {
         let mut n;
         if self.bits != 0 {
-            n = self.high_bit();
+            n = self.leading_zeros();
         } else {
             n = 32;
         }
@@ -126,7 +128,7 @@ impl BitReader {
     // Reads a gamma value with |forced| number of forced bits.
     pub fn ReadGammaX(&mut self, forced: i32) -> i32 {
         if self.bits != 0 {
-            let lz = self.high_bit();
+            let lz = self.leading_zeros();
             assert!(lz < 24);
             let r = (self.bits >> (31 - lz - forced)) + ((lz as u32 - 1) << forced);
             self.bits <<= lz + forced + 1;
@@ -198,7 +200,7 @@ impl BitReader {
     // Reads a length code.
     pub fn ReadLength(&mut self, source: &KrakenDecoder) -> Option<i32> {
         let mut n;
-        n = self.high_bit();
+        n = self.leading_zeros();
         if n > 12 {
             return None;
         }
@@ -215,7 +217,7 @@ impl BitReader {
 
     // Reads a length code, backwards.
     pub fn ReadLengthB(&mut self, source: &KrakenDecoder) -> Option<i32> {
-        let mut n = self.high_bit();
+        let mut n = self.leading_zeros();
         if n > 12 {
             return None;
         }
@@ -242,10 +244,9 @@ impl BitReader {
 
         x *= 2;
 
-        let h = (x - 1i32).ilog2();
-        let y = 32 - h;
+        let y = (x - 1i32).ilog2() + 1;
 
-        let v = self.bits >> h;
+        let v = self.bits >> (32 - y);
         let z = (1 << y) - x as u32;
 
         if (v >> 1) >= z {
@@ -259,7 +260,7 @@ impl BitReader {
         }
     }
 
-    pub fn high_bit(&self) -> i32 {
-        self.bits.ilog2() as _
+    pub fn leading_zeros(&self) -> i32 {
+        self.bits.leading_zeros() as _
     }
 }
