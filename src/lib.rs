@@ -339,13 +339,12 @@ impl<In: Read + Seek> Extractor<In> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::{
         fs,
         io::{Seek, SeekFrom},
         path::PathBuf,
     };
-
-    use super::*;
 
     #[test_log::test]
     fn it_works() {
@@ -353,10 +352,9 @@ mod tests {
         d.push("testdata");
         for path in fs::read_dir(d).unwrap() {
             let path = path.unwrap().path();
-            if !path.to_str().unwrap().contains(".kraken") {
-                continue;
-            }
-            log::info!("Extracting {:?}", path);
+            let filename = path.file_stem().unwrap().to_str().unwrap().to_string();
+            let extension = path.extension().unwrap().to_str().unwrap().to_string();
+            log::info!("Extracting {}.{}", filename, extension);
             let mut file = fs::File::open(path).unwrap();
             let mut buf = [0; 8];
             file.read_exact(&mut buf).unwrap();
@@ -369,6 +367,17 @@ mod tests {
             let buf = &mut vec![0; len];
             let mut extractor = Extractor::new(file);
             extractor.read_exact(buf).unwrap();
+
+            if extension == "kraken" {
+                let verify_file = format!("verify/{}", filename);
+                log::debug!("compare to file {}", verify_file);
+                let expected = std::fs::read(verify_file).unwrap();
+                assert_eq!(buf.len(), expected.len());
+                for (i, (l, r)) in buf.iter().zip(expected.iter()).enumerate() {
+                    assert_eq!(l, r, "difference at byte {}", i);
+                }
+            }
         }
+        log::debug!("done");
     }
 }

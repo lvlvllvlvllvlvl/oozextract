@@ -23,11 +23,9 @@ impl BitReader {
     pub fn Refill(&mut self, source: &KrakenDecoder) {
         assert!(self.bitpos <= 24);
         while self.bitpos > 0 {
-            self.bits |= (if self.p < self.p_end {
-                source.get_byte(self.p).into()
-            } else {
-                0
-            }) << self.bitpos;
+            if self.p < self.p_end {
+                self.bits |= (source.get_byte(self.p) as u32) << self.bitpos;
+            }
             self.bitpos -= 8;
             self.p += 1;
         }
@@ -39,11 +37,9 @@ impl BitReader {
         assert!(self.bitpos <= 24);
         while self.bitpos > 0 {
             self.p -= 1;
-            self.bits |= (if self.p >= self.p_end {
-                source.get_byte(self.p).into()
-            } else {
-                0
-            }) << self.bitpos;
+            if self.p >= self.p_end {
+                self.bits |= (source.get_byte(self.p) as u32) << self.bitpos;
+            }
             self.bitpos -= 8;
         }
     }
@@ -66,11 +62,9 @@ impl BitReader {
 
     // Read |n| bits without refilling.
     pub fn ReadBitsNoRefill(&mut self, n: i32) -> i32 {
-        //log::debug!("bits: {:X}", self.bits);
         let r = self.bits >> (32 - n);
         self.bits <<= n;
         self.bitpos += n;
-        //log::debug!("read: {:X}", r);
         r as _
     }
 
@@ -198,12 +192,10 @@ impl BitReader {
     }
 
     // Reads a length code.
-    pub fn ReadLength(&mut self, source: &KrakenDecoder) -> Option<i32> {
+    pub fn ReadLength(&mut self, source: &KrakenDecoder) -> i32 {
         let mut n;
         n = self.leading_zeros();
-        if n > 12 {
-            return None;
-        }
+        assert!(n <= 12);
         self.bitpos += n;
         self.bits <<= n;
         self.Refill(source);
@@ -212,15 +204,13 @@ impl BitReader {
         let rv = (self.bits >> (32 - n)) - 64;
         self.bits <<= n;
         self.Refill(source);
-        Some(rv as _)
+        rv as _
     }
 
     // Reads a length code, backwards.
-    pub fn ReadLengthB(&mut self, source: &KrakenDecoder) -> Option<i32> {
+    pub fn ReadLengthB(&mut self, source: &KrakenDecoder) -> i32 {
         let mut n = self.leading_zeros();
-        if n > 12 {
-            return None;
-        }
+        assert!(n <= 12);
         self.bitpos += n;
         self.bits <<= n;
         self.RefillBackwards(source);
@@ -229,7 +219,7 @@ impl BitReader {
         let rv = (self.bits >> (32 - n)) - 64;
         self.bits <<= n;
         self.RefillBackwards(source);
-        Some(rv as _)
+        rv as _
     }
 
     pub fn ReadFluff(&mut self, num_symbols: i32) -> usize {
