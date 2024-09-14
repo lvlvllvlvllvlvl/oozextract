@@ -1,4 +1,4 @@
-#![allow(non_snake_case)]
+#![allow(non_snake_case, clippy::too_many_arguments)]
 
 use crate::bit_reader::BitReader2;
 use crate::tans::TansDecoder;
@@ -299,7 +299,6 @@ impl KrakenDecoder<'_> {
         let dst_start = Pointer::output(0);
         let dst_end = Pointer::output(write_from + write_count);
         let scratch = Pointer::scratch(0);
-        let scratch_end = Pointer::scratch(self.scratch.len());
         let mut src_used;
 
         while dst_end > dst {
@@ -318,7 +317,6 @@ impl KrakenDecoder<'_> {
                     dst_count,
                     false,
                     scratch,
-                    scratch_end,
                 );
                 assert_eq!(written_bytes, dst_count);
             } else {
@@ -328,10 +326,6 @@ impl KrakenDecoder<'_> {
                 assert!(src_end - src >= src_used, "{} {}", src_end - src, src_used);
                 if src_used < dst_count {
                     log::debug!("Processing lz runs.");
-                    let scratch_usage = std::cmp::min(
-                        std::cmp::min(3 * dst_count + 32 + 0xd000, 0x6C000),
-                        scratch_end - scratch,
-                    );
                     let mut lz = self.Kraken_ReadLzTable(
                         mode,
                         src,
@@ -340,7 +334,6 @@ impl KrakenDecoder<'_> {
                         dst_count,
                         dst - dst_start,
                         scratch,
-                        scratch + scratch_usage,
                     );
                     self.Kraken_ProcessLzRuns(&mut lz, mode, dst, dst_count, dst - dst_start)
                 } else if src_used > dst_count || mode != 0 {
@@ -366,7 +359,6 @@ impl KrakenDecoder<'_> {
         output_size: usize,
         force_memmove: bool,
         mut scratch: Pointer,
-        scratch_end: Pointer,
     ) -> usize {
         let src_org = src;
         let src_size;
@@ -433,8 +425,8 @@ impl KrakenDecoder<'_> {
             2 | 4 => {
                 Some(self.Kraken_DecodeBytes_Type12(src, src_size, dst, dst_size, chunk_type >> 1))
             }
-            5 => self.Krak_DecodeRecursive(src, src_size, dst, dst_size, scratch, scratch_end),
-            3 => self.Krak_DecodeRLE(src, src_size, dst, dst_size, scratch, scratch_end),
+            5 => self.Krak_DecodeRecursive(src, src_size, dst, dst_size, scratch),
+            3 => self.Krak_DecodeRLE(src, src_size, dst, dst_size, scratch),
             1 => self.Krak_DecodeTans(src, src_size, dst, dst_size),
             _ => panic!("{}", chunk_type),
         };
@@ -546,7 +538,6 @@ impl KrakenDecoder<'_> {
         mut dst: Pointer,
         dst_size: usize,
         scratch: Pointer,
-        scratch_end: Pointer,
     ) -> Option<usize> {
         if src_size <= 1 {
             if src_size != 1 {
@@ -567,16 +558,12 @@ impl KrakenDecoder<'_> {
                 src,
                 src + src_size,
                 &mut dec_size,
-                scratch_end - scratch,
+                usize::MAX,
                 true,
                 scratch,
-                scratch_end,
             );
             assert!(n > 0, "{}", n);
             let cmd_len = src_size - n + dec_size;
-            if cmd_len > scratch_end - scratch {
-                return None;
-            }
             self.memcpy(dst_ptr + dec_size, src + n, src_size - n);
             cmd_ptr = dst_ptr;
             cmd_ptr_end = dst_ptr + cmd_len;
@@ -656,7 +643,6 @@ impl KrakenDecoder<'_> {
         mut output: Pointer,
         output_size: usize,
         scratch: Pointer,
-        scratch_end: Pointer,
     ) -> Option<usize> {
         let mut src = src_org;
         let output_end = output + output_size;
@@ -684,7 +670,6 @@ impl KrakenDecoder<'_> {
                     output_size,
                     true,
                     scratch,
-                    scratch_end,
                 );
                 output += decoded_size;
                 src += dec;
@@ -694,16 +679,8 @@ impl KrakenDecoder<'_> {
             }
             Some(src - src_org)
         } else {
-            let (dec, decoded_size, ..) = self.Kraken_DecodeMultiArray(
-                src,
-                src_end,
-                output,
-                output_end,
-                1,
-                true,
-                scratch,
-                scratch_end,
-            )?;
+            let (dec, decoded_size, ..) =
+                self.Kraken_DecodeMultiArray(src, src_end, output, output_end, 1, true, scratch)?;
             output += decoded_size;
             if output != output_end {
                 return None;
@@ -721,7 +698,6 @@ impl KrakenDecoder<'_> {
         array_count: usize,
         force_memmove: bool,
         scratch: Pointer,
-        scratch_end: Pointer,
     ) -> Option<(usize, usize, Vec<Pointer>, Vec<usize>)> {
         let mut src = src_org;
         let mut array_data = Vec::with_capacity(array_count);
@@ -752,7 +728,6 @@ impl KrakenDecoder<'_> {
                     dst_end - dst,
                     force_memmove,
                     scratch,
-                    scratch_end,
                 );
                 dst += decoded_size;
                 array_data.push(dst);
@@ -776,10 +751,9 @@ impl KrakenDecoder<'_> {
                 src,
                 src_end,
                 &mut decoded_size,
-                scratch_end - scratch_cur,
+                usize::MAX,
                 force_memmove,
                 scratch_cur,
-                scratch_end,
             );
             entropy_array_data[i] = chunk_dst;
             entropy_array_size[i] = decoded_size;
@@ -803,15 +777,9 @@ impl KrakenDecoder<'_> {
             return None;
         }
 
-        if scratch_end - scratch_cur < num_indexes {
-            return None;
-        }
         let mut interval_lenlog2 = scratch_cur;
         scratch_cur += num_indexes;
 
-        if scratch_end - scratch_cur < num_indexes {
-            return None;
-        }
         let mut interval_indexes = scratch_cur;
         scratch_cur += num_indexes;
 
@@ -825,7 +793,6 @@ impl KrakenDecoder<'_> {
                 num_indexes,
                 true,
                 scratch_cur,
-                scratch_end,
             );
             if size_out != num_indexes {
                 return None;
@@ -851,7 +818,6 @@ impl KrakenDecoder<'_> {
                 num_indexes,
                 false,
                 scratch_cur,
-                scratch_end,
             );
             src += n;
 
@@ -863,7 +829,6 @@ impl KrakenDecoder<'_> {
                 lenlog2_chunksize,
                 false,
                 scratch_cur,
-                scratch_end,
             );
             src += n;
 
@@ -872,10 +837,6 @@ impl KrakenDecoder<'_> {
                     return None;
                 }
             }
-        }
-
-        if scratch_end - scratch_cur < 4 {
-            return None;
         }
 
         let mut decoded_intervals = Vec::with_capacity(num_lens);
@@ -1298,11 +1259,11 @@ impl KrakenDecoder<'_> {
         bits.bitpos += br2.bitpos as i32;
 
         let mut running_sum = 0x1e;
-        for i in 0..num_symbols as _ {
-            let mut v = code_len[i];
+        for len in code_len.iter_mut() {
+            let mut v = *len;
             v = (!(v & 1) + 1) ^ (v >> 1);
-            code_len[i] = v + (running_sum >> 2) + 1;
-            if code_len[i] < 1 || code_len[i] > 11 {
+            *len = v + (running_sum >> 2) + 1;
+            if *len < 1 || *len > 11 {
                 return None;
             }
             running_sum += v;
@@ -1429,7 +1390,12 @@ impl KrakenDecoder<'_> {
         true
     }
 
-    fn DecodeGolombRiceBits(&self, mut dst: &mut [u8], bitcount: u32, br: &mut BitReader2) -> bool {
+    fn DecodeGolombRiceBits(
+        &mut self,
+        mut dst: &mut [u8],
+        bitcount: u32,
+        br: &mut BitReader2,
+    ) -> bool {
         if bitcount == 0 {
             return true;
         }
@@ -1557,7 +1523,6 @@ impl KrakenDecoder<'_> {
         dst_size: usize,
         offset: usize,
         mut scratch: Pointer,
-        scratch_end: Pointer,
     ) -> KrakenLzTable {
         let mut out;
         let mut decode_count = 0;
@@ -1596,7 +1561,6 @@ impl KrakenDecoder<'_> {
             dst_size,
             force_copy,
             scratch,
-            scratch_end,
         );
         src += n;
         let mut lz = KrakenLzTable {
@@ -1613,10 +1577,9 @@ impl KrakenDecoder<'_> {
             src,
             src_end,
             &mut decode_count,
-            std::cmp::min(scratch_end - scratch, dst_size),
+            dst_size,
             force_copy,
             scratch,
-            scratch_end,
         );
         src += n;
         lz.cmd_stream = out;
@@ -1640,10 +1603,9 @@ impl KrakenDecoder<'_> {
                 src,
                 src_end,
                 &mut lz.offs_stream_size,
-                std::cmp::min(scratch_end - scratch, lz.cmd_stream_size),
+                lz.cmd_stream_size,
                 false,
                 scratch,
-                scratch_end,
             );
             src += n;
             scratch += lz.offs_stream_size;
@@ -1655,10 +1617,9 @@ impl KrakenDecoder<'_> {
                     src,
                     src_end,
                     &mut decode_count,
-                    std::cmp::min(scratch_end - scratch, lz.offs_stream_size),
+                    lz.offs_stream_size,
                     false,
                     scratch,
-                    scratch_end,
                 );
                 assert_eq!(decode_count, lz.offs_stream_size);
                 src += n;
@@ -1672,10 +1633,9 @@ impl KrakenDecoder<'_> {
                 src,
                 src_end,
                 &mut lz.offs_stream_size,
-                std::cmp::min(scratch_end - scratch, lz.cmd_stream_size),
+                lz.cmd_stream_size,
                 false,
                 scratch,
-                scratch_end,
             );
             src += n;
             scratch += lz.offs_stream_size;
@@ -1688,10 +1648,9 @@ impl KrakenDecoder<'_> {
             src,
             src_end,
             &mut lz.len_stream_size,
-            std::cmp::min(scratch_end - scratch, dst_size >> 2),
+            dst_size >> 2,
             false,
             scratch,
-            scratch_end,
         );
         src += n;
         scratch += lz.len_stream_size;
@@ -1705,13 +1664,6 @@ impl KrakenDecoder<'_> {
         scratch = align_pointer(scratch, 16);
         lz.len_stream = scratch.into();
         scratch += lz.len_stream_size * 4;
-
-        assert!(
-            scratch + 64 <= scratch_end,
-            "{:?} {:?}",
-            scratch,
-            scratch_end
-        );
 
         self.Kraken_UnpackOffsets(
             src,
@@ -2062,7 +2014,7 @@ impl KrakenDecoder<'_> {
 pub struct KrakenDecoder<'a> {
     pub input: &'a [u8],
     pub output: &'a mut [u8],
-    pub scratch: [u8; 0x6C000],
+    pub scratch: Vec<u8>,
 }
 
 impl KrakenDecoder<'_> {
@@ -2070,7 +2022,7 @@ impl KrakenDecoder<'_> {
         KrakenDecoder {
             input,
             output,
-            scratch: [0; 0x6C000],
+            scratch: Vec::new(),
         }
     }
     pub fn get_byte(&self, p: Pointer) -> u8 {
@@ -2087,43 +2039,36 @@ impl KrakenDecoder<'_> {
     pub fn get_as_bool(&self, p: Pointer) -> bool {
         self.get_byte(p) != 0
     }
-    pub fn get_slice(&self, p: Pointer, n: usize) -> &[u8] {
+    pub fn get_slice(&mut self, p: Pointer, n: usize) -> &[u8] {
         match p.into {
             PointerDest::Null => panic!(),
             PointerDest::Input => &self.input[p.index..p.index + n],
             PointerDest::Output => &self.output[p.index..p.index + n],
-            Scratch => &self.scratch[p.index..p.index + n],
+            Scratch => {
+                self.ensure_scratch(p.index + n);
+                &self.scratch[p.index..p.index + n]
+            }
         }
     }
-    pub fn get_bytes_as_usize_le(&self, p: Pointer, n: usize) -> usize {
+    pub fn get_bytes_as_usize_le(&mut self, p: Pointer, n: usize) -> usize {
         let mut bytes = [0; std::mem::size_of::<usize>()];
         bytes[..n].copy_from_slice(self.get_slice(p, n));
         usize::from_le_bytes(bytes)
     }
-    pub fn get_bytes_as_usize_be(&self, p: Pointer, n: usize) -> usize {
+    pub fn get_bytes_as_usize_be(&mut self, p: Pointer, n: usize) -> usize {
         const B: usize = std::mem::size_of::<usize>();
         let mut bytes = [0; B];
         bytes[B - n..].copy_from_slice(self.get_slice(p, n));
         usize::from_be_bytes(bytes)
     }
 
-    pub fn get_int(&self, p: IntPointer) -> i32 {
-        match p.into {
-            PointerDest::Null => panic!(),
-            PointerDest::Input => {
-                i32::from_le_bytes(self.input[p.index..p.index + 4].try_into().unwrap())
-            }
-            PointerDest::Output => {
-                i32::from_le_bytes(self.output[p.index..p.index + 4].try_into().unwrap())
-            }
-            Scratch => i32::from_le_bytes(self.scratch[p.index..p.index + 4].try_into().unwrap()),
-        }
+    pub fn get_int(&mut self, p: IntPointer) -> i32 {
+        i32::from_le_bytes(self.get_slice(Pointer::from(p), 4).try_into().unwrap())
     }
 
     pub fn ensure_scratch(&mut self, size: usize) {
         if self.scratch.len() < size {
-            panic!()
-            //self.scratch.resize(size, 0);
+            self.scratch.resize(size, 0);
         }
     }
 
