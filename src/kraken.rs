@@ -1,5 +1,4 @@
 use crate::algorithm::Algorithm;
-use crate::bit_reader::BitReader;
 use crate::core::Core;
 use crate::pointer::{IntPointer, Pointer};
 
@@ -45,35 +44,33 @@ impl Algorithm for Kraken {
         dst_size: usize,
     ) {
         assert!(mode <= 1);
-        let mut lz = self.Kraken_ReadLzTable(
+        let mut lz = KrakenLzTable::Kraken_ReadLzTable(
             core,
             src,
             src + src_used,
             dst,
             dst_size,
             dst - dst_start,
-            Pointer::scratch(0),
         );
-        self.Kraken_ProcessLzRuns(core, &mut lz, mode, dst, dst_size, dst - dst_start)
+        lz.Kraken_ProcessLzRuns(core, mode, dst, dst_size, dst - dst_start)
     }
 }
 
-impl Kraken {
+impl KrakenLzTable {
     fn Kraken_ReadLzTable(
-        &self,
         core: &mut Core,
         mut src: Pointer,
         src_end: Pointer,
         mut dst: Pointer,
         dst_size: usize,
         offset: usize,
-        mut scratch: Pointer,
     ) -> KrakenLzTable {
         let mut out;
         let mut decode_count = 0;
         let mut n;
         let mut packed_offs_stream;
         let mut packed_len_stream;
+        let mut scratch = Pointer::scratch(0);
 
         assert!(src_end - src >= 13, "{:?} {:?}", src_end, src);
 
@@ -87,7 +84,7 @@ impl Kraken {
             let flag = core.get_as_usize(src);
             src += 1;
             assert_eq!(flag & 0xc0, 0x80, "reserved flag set");
-
+            // fail anyway...
             panic!("excess bytes not supported");
         }
 
@@ -133,7 +130,7 @@ impl Kraken {
         assert!(src_end - src >= 3, "{:?} {:?}", src_end, src);
 
         let mut offs_scaling = 0;
-        let mut packed_offs_stream_extra = Default::default();
+        let mut packed_offs_stream_extra = Pointer::null();
 
         if core.get_as_usize(src) & 0x80 != 0 {
             // uses the mode where distances are coded with 2 tables
@@ -208,8 +205,7 @@ impl Kraken {
         lz.len_stream = scratch.into();
         scratch += lz.len_stream_size * 4;
 
-        self.Kraken_UnpackOffsets(
-            core,
+        core.Kraken_UnpackOffsets(
             src,
             src_end,
             packed_offs_stream,
@@ -226,153 +222,9 @@ impl Kraken {
         lz
     }
 
-    // Unpacks the packed 8 bit offset and lengths into 32 bit.
-    fn Kraken_UnpackOffsets(
-        &self,
-        core: &mut Core,
-        src: Pointer,
-        src_end: Pointer,
-        mut packed_offs_stream: Pointer,
-        packed_offs_stream_extra: Pointer,
-        packed_offs_stream_size: usize,
-        multi_dist_scale: i32,
-        packed_litlen_stream: Pointer,
-        packed_litlen_stream_size: usize,
-        mut offs_stream: IntPointer,
-        len_stream: IntPointer,
-        excess_flag: bool,
-    ) {
-        let mut n;
-        let mut u32_len_stream_size = 0usize;
-        let offs_stream_org = offs_stream;
-
-        let mut bits_a = BitReader {
-            bitpos: 24,
-            bits: 0,
-            p: src,
-            p_end: src_end,
-        };
-        bits_a.Refill(core);
-
-        let mut bits_b = BitReader {
-            bitpos: 24,
-            bits: 0,
-            p: src_end,
-            p_end: src,
-        };
-        bits_b.RefillBackwards(core);
-
-        if !excess_flag {
-            assert!(bits_b.bits >= 0x2000, "{:X}", bits_b.bits);
-            n = bits_b.leading_zeros();
-            bits_b.bitpos += n;
-            bits_b.bits <<= n;
-            bits_b.RefillBackwards(core);
-            n += 1;
-            u32_len_stream_size = ((bits_b.bits >> (32 - n)) - 1) as usize;
-            bits_b.bitpos += n;
-            bits_b.bits <<= n;
-            bits_b.RefillBackwards(core);
-        }
-
-        if multi_dist_scale == 0 {
-            // Traditional way of coding offsets
-            let packed_offs_stream_end = packed_offs_stream + packed_offs_stream_size;
-            while packed_offs_stream != packed_offs_stream_end {
-                let d_a = bits_a.ReadDistance(core, core.get_byte(packed_offs_stream).into());
-                core.set_int(offs_stream, -d_a);
-                offs_stream += 1;
-                packed_offs_stream += 1;
-                if packed_offs_stream == packed_offs_stream_end {
-                    break;
-                }
-                let d_b = bits_b.ReadDistanceB(core, core.get_byte(packed_offs_stream).into());
-                core.set_int(offs_stream, -d_b);
-                offs_stream += 1;
-                packed_offs_stream += 1;
-            }
-        } else {
-            // New way of coding offsets
-            let packed_offs_stream_end = packed_offs_stream + packed_offs_stream_size;
-            let mut cmd;
-            let mut offs;
-            while packed_offs_stream != packed_offs_stream_end {
-                cmd = i32::from(core.get_byte(packed_offs_stream));
-                packed_offs_stream += 1;
-                assert!((cmd >> 3) <= 26, "{}", cmd >> 3);
-                offs = ((8 + (cmd & 7)) << (cmd >> 3)) | bits_a.ReadMoreThan24Bits(core, cmd >> 3);
-                core.set_int(offs_stream, 8 - offs);
-                offs_stream += 1;
-                if packed_offs_stream == packed_offs_stream_end {
-                    break;
-                }
-                cmd = i32::from(core.get_byte(packed_offs_stream));
-                packed_offs_stream += 1;
-                assert!((cmd >> 3) <= 26, "{}", cmd >> 3);
-                offs = ((8 + (cmd & 7)) << (cmd >> 3)) | bits_b.ReadMoreThan24BitsB(core, cmd >> 3);
-                core.set_int(offs_stream, 8 - offs);
-                offs_stream += 1;
-            }
-            if multi_dist_scale != 1 {
-                self.CombineScaledOffsetArrays(
-                    core,
-                    &offs_stream_org,
-                    offs_stream - offs_stream_org,
-                    multi_dist_scale,
-                    &packed_offs_stream_extra,
-                );
-            }
-        }
-        let mut u32_len_stream_buf = [0u32; 512]; // max count is 128kb / 256 = 512
-        assert!(u32_len_stream_size <= 512, "{:?}", u32_len_stream_size);
-
-        let mut u32_len_stream = 0;
-        for (i, dst) in u32_len_stream_buf[..u32_len_stream_size]
-            .iter_mut()
-            .enumerate()
-        {
-            if i % 2 == 0 {
-                *dst = bits_a.ReadLength(core) as u32
-            } else {
-                *dst = bits_b.ReadLengthB(core) as u32
-            }
-        }
-
-        bits_a.p -= (24 - bits_a.bitpos) >> 3;
-        bits_b.p += (24 - bits_b.bitpos) >> 3;
-
-        assert_eq!(bits_a.p, bits_b.p);
-
-        for i in 0..packed_litlen_stream_size {
-            let mut v = u32::from(core.get_byte(packed_litlen_stream + i));
-            if v == 255 {
-                v = u32_len_stream_buf[u32_len_stream] + 255;
-                u32_len_stream += 1;
-            }
-            core.set_int(len_stream + i, (v + 3) as i32);
-        }
-        assert_eq!(u32_len_stream, u32_len_stream_size);
-    }
-
-    fn CombineScaledOffsetArrays(
-        &self,
-        core: &mut Core,
-        offs_stream: &IntPointer,
-        offs_stream_size: usize,
-        scale: i32,
-        low_bits: &Pointer,
-    ) {
-        for i in 0..offs_stream_size {
-            let scaled =
-                scale * core.get_int(offs_stream + i) + i32::from(core.get_byte(low_bits + i));
-            core.set_int(offs_stream + i, scaled)
-        }
-    }
-
     fn Kraken_ProcessLzRuns(
-        &self,
+        &mut self,
         core: &mut Core,
-        lz: &mut KrakenLzTable,
         mode: usize,
         mut dst: Pointer,
         dst_size: usize,
@@ -383,14 +235,14 @@ impl Kraken {
             dst += 8
         };
 
-        let mut cmd_stream = lz.cmd_stream;
-        let cmd_stream_end = cmd_stream + lz.cmd_stream_size;
-        let mut len_stream = lz.len_stream;
-        let len_stream_end = lz.len_stream + lz.len_stream_size;
-        let mut lit_stream = lz.lit_stream;
-        let lit_stream_end = lz.lit_stream + lz.lit_stream_size;
-        let mut offs_stream = lz.offs_stream;
-        let offs_stream_end = lz.offs_stream + lz.offs_stream_size;
+        let mut cmd_stream = self.cmd_stream;
+        let cmd_stream_end = cmd_stream + self.cmd_stream_size;
+        let mut len_stream = self.len_stream;
+        let len_stream_end = self.len_stream + self.len_stream_size;
+        let mut lit_stream = self.lit_stream;
+        let lit_stream_end = self.lit_stream + self.lit_stream_size;
+        let mut offs_stream = self.offs_stream;
+        let offs_stream_end = self.offs_stream + self.offs_stream_size;
         let mut copyfrom;
         let mut offset;
         let mut recent_offs = [0; 7];

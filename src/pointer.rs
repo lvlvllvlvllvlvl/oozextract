@@ -26,18 +26,6 @@ pub struct Pointer {
 }
 
 impl Pointer {
-    pub fn debug(&self, n: usize) {
-        let error_byte = 34184;
-        if self.into == PointerDest::Output
-            && self.index <= error_byte
-            && self.index + n > error_byte
-        {
-            log::debug!("here")
-        }
-    }
-}
-
-impl Pointer {
     pub fn input(index: usize) -> Self {
         Pointer {
             into: PointerDest::Input,
@@ -56,10 +44,22 @@ impl Pointer {
             index,
         }
     }
+    pub fn null() -> Pointer {
+        Default::default()
+    }
+    pub fn is_null(&self) -> bool {
+        self.into == PointerDest::Null
+    }
     pub fn align(&self, align: usize) -> Pointer {
         Pointer {
             index: (self.index + (align - 1)) & !(align - 1),
             ..*self
+        }
+    }
+    pub fn debug(&self, n: usize) {
+        let bad_byte = 34184;
+        if self.into == PointerDest::Output && self.index <= bad_byte && self.index + n > bad_byte {
+            log::debug!("breakpoint here")
         }
     }
 }

@@ -1,7 +1,7 @@
 use crate::algorithm::Algorithm;
 use crate::bit_reader::{BitReader, BitReader2};
 use crate::huffman::{HuffRange, HuffReader, HuffRevLut, BASE_PREFIX};
-use crate::pointer::{Pointer, PointerDest};
+use crate::pointer::{IntPointer, Pointer, PointerDest};
 use crate::tans::TansDecoder;
 use std::fmt::Debug;
 
@@ -67,6 +67,146 @@ impl Core<'_> {
         }
 
         src - src_in
+    }
+
+    // Unpacks the packed 8 bit offset and lengths into 32 bit.
+    pub fn Kraken_UnpackOffsets(
+        &mut self,
+        src: Pointer,
+        src_end: Pointer,
+        mut packed_offs_stream: Pointer,
+        packed_offs_stream_extra: Pointer,
+        packed_offs_stream_size: usize,
+        multi_dist_scale: i32,
+        packed_litlen_stream: Pointer,
+        packed_litlen_stream_size: usize,
+        mut offs_stream: IntPointer,
+        len_stream: IntPointer,
+        excess_flag: bool,
+    ) {
+        let mut n;
+        let mut u32_len_stream_size = 0usize;
+        let offs_stream_org = offs_stream;
+
+        let mut bits_a = BitReader {
+            bitpos: 24,
+            bits: 0,
+            p: src,
+            p_end: src_end,
+        };
+        bits_a.Refill(self);
+
+        let mut bits_b = BitReader {
+            bitpos: 24,
+            bits: 0,
+            p: src_end,
+            p_end: src,
+        };
+        bits_b.RefillBackwards(self);
+
+        if !excess_flag {
+            assert!(bits_b.bits >= 0x2000, "{:X}", bits_b.bits);
+            n = bits_b.leading_zeros();
+            bits_b.bitpos += n;
+            bits_b.bits <<= n;
+            bits_b.RefillBackwards(self);
+            n += 1;
+            u32_len_stream_size = ((bits_b.bits >> (32 - n)) - 1) as usize;
+            bits_b.bitpos += n;
+            bits_b.bits <<= n;
+            bits_b.RefillBackwards(self);
+        }
+
+        if multi_dist_scale == 0 {
+            // Traditional way of coding offsets
+            let packed_offs_stream_end = packed_offs_stream + packed_offs_stream_size;
+            while packed_offs_stream != packed_offs_stream_end {
+                let d_a = bits_a.ReadDistance(self, self.get_byte(packed_offs_stream).into());
+                self.set_int(offs_stream, -d_a);
+                offs_stream += 1;
+                packed_offs_stream += 1;
+                if packed_offs_stream == packed_offs_stream_end {
+                    break;
+                }
+                let d_b = bits_b.ReadDistanceB(self, self.get_byte(packed_offs_stream).into());
+                self.set_int(offs_stream, -d_b);
+                offs_stream += 1;
+                packed_offs_stream += 1;
+            }
+        } else {
+            // New way of coding offsets
+            let packed_offs_stream_end = packed_offs_stream + packed_offs_stream_size;
+            let mut cmd;
+            let mut offs;
+            while packed_offs_stream != packed_offs_stream_end {
+                cmd = i32::from(self.get_byte(packed_offs_stream));
+                packed_offs_stream += 1;
+                assert!((cmd >> 3) <= 26, "{}", cmd >> 3);
+                offs = ((8 + (cmd & 7)) << (cmd >> 3)) | bits_a.ReadMoreThan24Bits(self, cmd >> 3);
+                self.set_int(offs_stream, 8 - offs);
+                offs_stream += 1;
+                if packed_offs_stream == packed_offs_stream_end {
+                    break;
+                }
+                cmd = i32::from(self.get_byte(packed_offs_stream));
+                packed_offs_stream += 1;
+                assert!((cmd >> 3) <= 26, "{}", cmd >> 3);
+                offs = ((8 + (cmd & 7)) << (cmd >> 3)) | bits_b.ReadMoreThan24BitsB(self, cmd >> 3);
+                self.set_int(offs_stream, 8 - offs);
+                offs_stream += 1;
+            }
+            if multi_dist_scale != 1 {
+                self.CombineScaledOffsetArrays(
+                    &offs_stream_org,
+                    offs_stream - offs_stream_org,
+                    multi_dist_scale,
+                    &packed_offs_stream_extra,
+                );
+            }
+        }
+        let mut u32_len_stream_buf = [0u32; 512]; // max count is 128kb / 256 = 512
+        assert!(u32_len_stream_size <= 512, "{:?}", u32_len_stream_size);
+
+        let mut u32_len_stream = 0;
+        for (i, dst) in u32_len_stream_buf[..u32_len_stream_size]
+            .iter_mut()
+            .enumerate()
+        {
+            if i % 2 == 0 {
+                *dst = bits_a.ReadLength(self) as u32
+            } else {
+                *dst = bits_b.ReadLengthB(self) as u32
+            }
+        }
+
+        bits_a.p -= (24 - bits_a.bitpos) >> 3;
+        bits_b.p += (24 - bits_b.bitpos) >> 3;
+
+        assert_eq!(bits_a.p, bits_b.p);
+
+        for i in 0..packed_litlen_stream_size {
+            let mut v = u32::from(self.get_byte(packed_litlen_stream + i));
+            if v == 255 {
+                v = u32_len_stream_buf[u32_len_stream] + 255;
+                u32_len_stream += 1;
+            }
+            self.set_int(len_stream + i, (v + 3) as i32);
+        }
+        assert_eq!(u32_len_stream, u32_len_stream_size);
+    }
+
+    fn CombineScaledOffsetArrays(
+        &mut self,
+        offs_stream: &IntPointer,
+        offs_stream_size: usize,
+        scale: i32,
+        low_bits: &Pointer,
+    ) {
+        for i in 0..offs_stream_size {
+            let scaled =
+                scale * self.get_int(offs_stream + i) + i32::from(self.get_byte(low_bits + i));
+            self.set_int(offs_stream + i, scaled)
+        }
     }
 
     pub fn Kraken_DecodeBytes(
@@ -686,8 +826,19 @@ impl Core<'_> {
             }
             Some(src - src_org)
         } else {
-            let (dec, decoded_size, ..) =
-                self.Kraken_DecodeMultiArray(src, src_end, output, output_end, 1, true, scratch)?;
+            let mut decoded_size = 0;
+            let dec = self.Kraken_DecodeMultiArray(
+                src,
+                src_end,
+                output,
+                output_end,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                1,
+                &mut decoded_size,
+                true,
+                scratch,
+            );
             output += decoded_size;
             if output != output_end {
                 return None;
@@ -696,30 +847,27 @@ impl Core<'_> {
         }
     }
 
-    fn Kraken_DecodeMultiArray(
+    pub fn Kraken_DecodeMultiArray(
         &mut self,
         src_org: Pointer,
         src_end: Pointer,
         mut dst: Pointer,
         dst_end: Pointer,
+        array_data: &mut Vec<Pointer>,
+        array_lens: &mut Vec<usize>,
         array_count: usize,
+        total_size_out: &mut usize,
         force_memmove: bool,
         scratch: Pointer,
-    ) -> Option<(usize, usize, Vec<Pointer>, Vec<usize>)> {
+    ) -> usize {
         let mut src = src_org;
-        let mut array_data = Vec::with_capacity(array_count);
-        let mut array_lens = Vec::with_capacity(array_count);
 
-        if src_end - src < 4 {
-            return None;
-        }
+        assert!(src_end - src >= 4, "{}", src_end - src);
 
         let mut decoded_size = 0;
         let mut num_arrays_in_file = self.get_as_usize(src);
         src += 1;
-        if (num_arrays_in_file & 0x80) == 0 {
-            return None;
-        }
+        assert_ne!(num_arrays_in_file & 0x80, 0);
         num_arrays_in_file &= 0x3f;
 
         let mut total_size = 0;
@@ -742,7 +890,8 @@ impl Core<'_> {
                 src += dec;
                 total_size += decoded_size;
             }
-            return Some((src - src_org, total_size, array_data, array_lens)); // not supported yet
+            *total_size_out = total_size;
+            return src - src_org; // not supported yet
         }
 
         let mut entropy_array_data = [Default::default(); 63];
@@ -768,21 +917,17 @@ impl Core<'_> {
             total_size += decoded_size;
             src += dec;
         }
-        let total_size_out = total_size;
+        *total_size_out = total_size;
 
-        if src_end - src < 3 {
-            return None;
-        }
+        assert!(src_end - src >= 3, "{}", src_end - src);
 
         let q = self.get_bytes_as_usize_le(src, 2);
         src += 2;
 
-        let num_indexes = self.Kraken_GetBlockSize(src, src_end, total_size)?;
+        let num_indexes = self.Kraken_GetBlockSize(src, src_end, total_size).unwrap();
 
         let mut num_lens = num_indexes - array_count;
-        if num_lens < 1 {
-            return None;
-        }
+        assert_ne!(num_lens, 0);
 
         let mut interval_lenlog2 = scratch_cur;
         scratch_cur += num_indexes;
@@ -801,9 +946,7 @@ impl Core<'_> {
                 true,
                 scratch_cur,
             );
-            if size_out != num_indexes {
-                return None;
-            }
+            assert_eq!(size_out, num_indexes);
             src += n;
 
             for i in 0..num_indexes {
@@ -840,18 +983,24 @@ impl Core<'_> {
             src += n;
 
             for i in 0..lenlog2_chunksize {
-                if self.get_byte(interval_lenlog2 + i) > 16 {
-                    return None;
-                }
+                assert!(
+                    self.get_byte(interval_lenlog2 + i) <= 16,
+                    "{} {}",
+                    i,
+                    self.get_byte(interval_lenlog2 + i)
+                );
             }
         }
 
         let mut decoded_intervals = Vec::with_capacity(num_lens);
 
         let varbits_complen = q & 0x3FFF;
-        if src_end - src < varbits_complen {
-            return None;
-        }
+        assert!(
+            src_end - src >= varbits_complen,
+            "{} {}",
+            src_end - src,
+            varbits_complen
+        );
 
         let mut f = src;
         let mut bits_f = 0;
@@ -905,9 +1054,7 @@ impl Core<'_> {
             decoded_intervals.push(value_f);
         }
 
-        if self.get_as_bool(interval_indexes + num_indexes - 1) {
-            return None;
-        }
+        assert!(!self.get_as_bool(interval_indexes + num_indexes - 1));
 
         let mut indi = 0;
         let mut leni = 0;
@@ -915,9 +1062,7 @@ impl Core<'_> {
 
         for arri in 0..array_count {
             array_data.push(dst);
-            if indi >= num_indexes {
-                return None;
-            }
+            assert!(indi < num_indexes, "{} {}", indi, num_indexes);
 
             loop {
                 let source = self.get_as_usize(interval_indexes + indi);
@@ -925,18 +1070,18 @@ impl Core<'_> {
                     break;
                 }
                 indi += 1;
-                if source > num_arrays_in_file {
-                    return None;
-                }
-                if leni >= num_lens {
-                    return None;
-                }
+                assert!(
+                    source <= num_arrays_in_file,
+                    "{} {}",
+                    source,
+                    num_arrays_in_file
+                );
+                assert!(leni < num_lens, "{} {}", leni, num_lens);
                 let cur_len = decoded_intervals[leni];
                 leni += 1;
                 let bytes_left = entropy_array_size[source - 1];
-                if cur_len > bytes_left || cur_len > dst_end - dst {
-                    return None;
-                }
+                assert!(cur_len <= bytes_left, "{} {}", cur_len, bytes_left);
+                assert!(cur_len <= dst_end - dst, "{} {}", cur_len, dst_end - dst);
                 let blksrc = entropy_array_data[source - 1];
                 entropy_array_size[source - 1] -= cur_len;
                 entropy_array_data[source - 1] += cur_len;
@@ -950,21 +1095,14 @@ impl Core<'_> {
             array_lens.push(dst - array_data[arri]);
         }
 
-        if indi != num_indexes || leni != num_lens {
-            return None;
-        }
+        assert_eq!(indi, num_indexes);
+        assert_eq!(leni, num_lens);
 
         for &i in entropy_array_size[..num_arrays_in_file].iter() {
-            if i != 0 {
-                return None;
-            }
+            assert_eq!(i, 0);
         }
-        Some((
-            src_end_actual - src_org,
-            total_size_out,
-            array_data,
-            array_lens,
-        ))
+
+        src_end_actual - src_org
     }
 
     fn Kraken_GetBlockSize(

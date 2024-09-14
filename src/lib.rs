@@ -6,6 +6,7 @@ mod algorithm;
 mod core;
 pub mod huffman;
 pub mod kraken;
+mod leviathan;
 mod pointer;
 pub mod tans;
 
@@ -14,6 +15,7 @@ use std::io::{ErrorKind, Read, Seek};
 use std::panic::Location;
 
 use crate::core::Core;
+use crate::leviathan::Leviathan;
 pub use kraken::*;
 
 #[derive(Debug)]
@@ -176,7 +178,9 @@ impl<In: Read + Seek> Extractor<In> {
                     }
                     DecoderType::Mermaid => compressed_size,
                     DecoderType::Bitknit => compressed_size,
-                    DecoderType::Leviathan => compressed_size,
+                    DecoderType::Leviathan => {
+                        Core::new(input, output).decode_quantum(offset, dst_bytes_left, Leviathan)
+                    }
                 };
                 assert_eq!(bytes_read, compressed_size);
                 log::debug!(
