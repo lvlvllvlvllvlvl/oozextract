@@ -326,8 +326,8 @@ impl KrakenDecoder<'_> {
                 assert!(src_end - src >= src_used, "{} {}", src_end - src, src_used);
                 if src_used < dst_count {
                     log::debug!("Processing lz runs.");
+                    assert!(mode <= 1);
                     let mut lz = self.Kraken_ReadLzTable(
-                        mode,
                         src,
                         src + src_used,
                         dst,
@@ -1516,7 +1516,6 @@ impl KrakenDecoder<'_> {
 
     fn Kraken_ReadLzTable(
         &mut self,
-        mode: usize,
         mut src: Pointer,
         src_end: Pointer,
         mut dst: Pointer,
@@ -1529,8 +1528,6 @@ impl KrakenDecoder<'_> {
         let mut n;
         let mut packed_offs_stream;
         let mut packed_len_stream;
-
-        assert!(mode <= 1);
 
         assert!(src_end - src >= 13, "{:?} {:?}", src_end, src);
 
@@ -1826,32 +1823,15 @@ impl KrakenDecoder<'_> {
         &mut self,
         lz: &mut KrakenLzTable,
         mode: usize,
-        dst: Pointer,
+        mut dst: Pointer,
         dst_size: usize,
         offset: usize,
     ) {
         let dst_end = dst + dst_size;
+        if offset == 0 {
+            dst += 8
+        };
 
-        if mode == 1 {
-            return self.Kraken_ProcessLzRuns_Type1(
-                lz,
-                dst + (if offset == 0 { 8 } else { 0 }),
-                dst_end,
-            );
-        }
-
-        if mode == 0 {
-            self.Kraken_ProcessLzRuns_Type0(lz, dst + (if offset == 0 { 8 } else { 0 }), dst_end)
-        }
-    }
-
-    // Note: may access memory out of bounds on invalid input.
-    fn Kraken_ProcessLzRuns_Type0(
-        &mut self,
-        lz: &mut KrakenLzTable,
-        mut dst: Pointer,
-        dst_end: Pointer,
-    ) {
         let mut cmd_stream = lz.cmd_stream;
         let cmd_stream_end = cmd_stream + lz.cmd_stream_size;
         let mut len_stream = lz.len_stream;
@@ -1862,7 +1842,7 @@ impl KrakenDecoder<'_> {
         let offs_stream_end = lz.offs_stream + lz.offs_stream_size;
         let mut copyfrom;
         let mut offset;
-        let mut recent_offs: [i32; 7] = [0; 7];
+        let mut recent_offs = [0; 7];
         let mut last_offset: i32;
 
         recent_offs[3] = -8;
@@ -1893,18 +1873,22 @@ impl KrakenDecoder<'_> {
             };
             recent_offs[6] = self.get_int(offs_stream);
 
-            self.copy_64_add(dst, lit_stream, dst + last_offset, litlen);
+            if mode == 0 {
+                self.copy_64_add(dst, lit_stream, dst + last_offset, litlen);
+            } else {
+                self.memmove(dst, lit_stream, litlen);
+            }
             dst += litlen;
             lit_stream += litlen;
 
             offset = recent_offs[offs_index + 3];
-            recent_offs[offs_index + 3] = recent_offs[offs_index + 2];
-            recent_offs[offs_index + 2] = recent_offs[offs_index + 1];
-            recent_offs[offs_index + 1] = recent_offs[offs_index + 0];
+            recent_offs.copy_within(offs_index..offs_index + 3, offs_index + 1);
             recent_offs[3] = offset;
             last_offset = offset;
 
-            offs_stream = offs_stream.add_byte_offset((offs_index + 1) & 4);
+            if offs_index == 3 {
+                offs_stream += 1;
+            }
 
             copyfrom = dst + offset;
             if matchlen != 15 {
@@ -1926,88 +1910,11 @@ impl KrakenDecoder<'_> {
         let final_len = dst_end - dst;
         assert_eq!(final_len, lit_stream_end - lit_stream);
 
-        self.copy_64_add(dst, lit_stream, dst + last_offset, final_len);
-    }
-
-    // Note: may access memory out of bounds on invalid input.
-    fn Kraken_ProcessLzRuns_Type1(
-        &mut self,
-        lz: &mut KrakenLzTable,
-        mut dst: Pointer,
-        dst_end: Pointer,
-    ) {
-        let mut cmd_stream = lz.cmd_stream;
-        let cmd_stream_end = cmd_stream + lz.cmd_stream_size;
-        let mut len_stream = lz.len_stream;
-        let len_stream_end = lz.len_stream + lz.len_stream_size;
-        let mut lit_stream = lz.lit_stream;
-        let lit_stream_end = lz.lit_stream + lz.lit_stream_size;
-        let mut offs_stream = lz.offs_stream;
-        let offs_stream_end = lz.offs_stream + lz.offs_stream_size;
-        let mut copyfrom;
-        let mut offset;
-        let mut recent_offs = [0; 7];
-
-        recent_offs[3] = -8;
-        recent_offs[4] = -8;
-        recent_offs[5] = -8;
-
-        while cmd_stream < cmd_stream_end {
-            let f = self.get_as_usize(cmd_stream);
-            cmd_stream += 1;
-            let mut litlen = f & 3;
-            let offs_index = f >> 6;
-            let mut matchlen = (f >> 2) & 0xF;
-
-            // use cmov
-            let next_long_length = self.get_int(len_stream);
-            let next_len_stream = len_stream + 1;
-
-            len_stream = if litlen == 3 {
-                next_len_stream
-            } else {
-                len_stream
-            };
-            litlen = if litlen == 3 {
-                next_long_length.try_into().unwrap()
-            } else {
-                litlen
-            };
-            recent_offs[6] = self.get_int(offs_stream);
-
-            self.memmove(dst, lit_stream, litlen);
-            dst += litlen;
-            lit_stream += litlen;
-
-            offset = recent_offs[offs_index + 3];
-            recent_offs[offs_index + 3] = recent_offs[offs_index + 2];
-            recent_offs[offs_index + 2] = recent_offs[offs_index + 1];
-            recent_offs[offs_index + 1] = recent_offs[offs_index + 0];
-            recent_offs[3] = offset;
-
-            offs_stream = offs_stream.add_byte_offset((offs_index + 1) & 4);
-
-            copyfrom = dst + offset;
-            if matchlen != 15 {
-                self.repeat_copy_64(dst, copyfrom, matchlen + 2);
-                dst += matchlen + 2;
-            } else {
-                // why is the value not 16 here, the above case copies up to 16 bytes.
-                matchlen = (14 + self.get_int(len_stream)).try_into().unwrap();
-                len_stream += 1;
-                self.repeat_copy_64(dst, copyfrom, matchlen);
-                dst += matchlen;
-            }
+        if mode == 0 {
+            self.copy_64_add(dst, lit_stream, dst + last_offset, final_len);
+        } else {
+            self.memmove(dst, lit_stream, final_len);
         }
-
-        // check for incorrect input
-        assert_eq!(offs_stream, offs_stream_end);
-        assert_eq!(len_stream, len_stream_end);
-
-        let final_len = dst_end - dst;
-        assert_eq!(final_len, lit_stream_end - lit_stream);
-
-        self.memmove(dst, lit_stream, final_len);
     }
 }
 
