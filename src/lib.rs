@@ -1,13 +1,19 @@
+#![allow(non_snake_case, clippy::too_many_arguments)]
+
 pub mod bit_reader;
 //pub mod error;
+mod algorithm;
+mod core;
 pub mod huffman;
 pub mod kraken;
+mod pointer;
 pub mod tans;
 
 use std::fmt::Debug;
 use std::io::{ErrorKind, Read, Seek};
 use std::panic::Location;
 
+use crate::core::Core;
 pub use kraken::*;
 
 #[derive(Debug)]
@@ -166,7 +172,7 @@ impl<In: Read + Seek> Extractor<In> {
                 let bytes_read = match header.decoder_type {
                     DecoderType::Lzna => compressed_size,
                     DecoderType::Kraken => {
-                        KrakenDecoder::new(input, output).decode_quantum(offset, dst_bytes_left)
+                        Core::new(input, output).decode_quantum(offset, dst_bytes_left, Kraken)
                     }
                     DecoderType::Mermaid => compressed_size,
                     DecoderType::Bitknit => compressed_size,

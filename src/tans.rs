@@ -1,5 +1,6 @@
 use crate::bit_reader::{BitReader, BitReader2};
-use crate::{KrakenDecoder, Pointer};
+use crate::core::Core;
+use crate::pointer::Pointer;
 
 #[derive(Default)]
 pub struct TansDecoder {
@@ -16,7 +17,7 @@ pub struct TansDecoder {
 }
 
 impl TansDecoder {
-    pub fn decode(&mut self, core: &mut KrakenDecoder) {
+    pub fn decode(&mut self, core: &mut Core) {
         assert!(
             self.ptr_f <= self.ptr_b,
             "{:?} > {:?}",
@@ -51,13 +52,13 @@ impl TansDecoder {
         core.set_bytes(self.dst_end, &self.state.map(|s| s as u8));
     }
 
-    fn tans_forward_bits(&mut self, core: &mut KrakenDecoder) {
+    fn tans_forward_bits(&mut self, core: &mut Core) {
         self.bits_f |= core.get_bytes_as_usize_le(self.ptr_f, 4) << self.bitpos_f;
         self.ptr_f += (31 - self.bitpos_f) >> 3;
         self.bitpos_f |= 24;
     }
 
-    fn tans_forward_round(&mut self, core: &mut KrakenDecoder, i: usize) {
+    fn tans_forward_round(&mut self, core: &mut Core, i: usize) {
         let e = &self.lut[self.state[i]];
         core.set(self.dst, e.symbol);
         self.dst += 1;
@@ -66,13 +67,13 @@ impl TansDecoder {
         self.bits_f >>= e.bits_x;
     }
 
-    fn tans_backward_bits(&mut self, core: &mut KrakenDecoder) {
+    fn tans_backward_bits(&mut self, core: &mut Core) {
         self.bits_b |= core.get_bytes_as_usize_be(self.ptr_b - 4, 4) << self.bitpos_b;
         self.ptr_b -= (31 - self.bitpos_b) >> 3;
         self.bitpos_b |= 24;
     }
 
-    fn tans_backward_round(&mut self, core: &mut KrakenDecoder, i: usize) {
+    fn tans_backward_round(&mut self, core: &mut Core, i: usize) {
         let e = &self.lut[self.state[i]];
         core.set(self.dst, e.symbol);
         self.dst += 1;
@@ -183,11 +184,7 @@ impl TansDecoder {
         lut
     }
 
-    pub fn decode_table(
-        core: &mut KrakenDecoder,
-        bits: &mut BitReader,
-        l_bits: i32,
-    ) -> Option<TansData> {
+    pub fn decode_table(core: &mut Core, bits: &mut BitReader, l_bits: i32) -> Option<TansData> {
         let mut tans_data = TansData {
             a_used: 0,
             b_used: 0,

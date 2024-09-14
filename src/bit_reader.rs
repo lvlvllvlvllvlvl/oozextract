@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
-use crate::{KrakenDecoder, Pointer};
+use crate::core::Core;
+use crate::pointer::Pointer;
 
 pub struct BitReader {
     /// |p| holds the current u8 and |p_end| the end of the buffer.
@@ -20,7 +21,7 @@ pub struct BitReader2 {
 
 impl BitReader {
     // Read more bytes to make sure we always have at least 24 bits in |bits|.
-    pub fn Refill(&mut self, source: &KrakenDecoder) {
+    pub fn Refill(&mut self, source: &Core) {
         assert!(self.bitpos <= 24);
         while self.bitpos > 0 {
             if self.p < self.p_end {
@@ -33,7 +34,7 @@ impl BitReader {
 
     // Read more bytes to make sure we always have at least 24 bits in |bits|,
     // used when reading backwards.
-    pub fn RefillBackwards(&mut self, source: &KrakenDecoder) {
+    pub fn RefillBackwards(&mut self, source: &Core) {
         assert!(self.bitpos <= 24);
         while self.bitpos > 0 {
             self.p -= 1;
@@ -45,7 +46,7 @@ impl BitReader {
     }
 
     // Refill bits then read a single bit.
-    pub fn ReadBit(&mut self, source: &KrakenDecoder) -> bool {
+    pub fn ReadBit(&mut self, source: &Core) -> bool {
         self.Refill(source);
         let r = self.bits >> 31;
         self.bits <<= 1;
@@ -76,7 +77,7 @@ impl BitReader {
         r as _
     }
 
-    pub fn ReadMoreThan24Bits(&mut self, source: &KrakenDecoder, n: i32) -> i32 {
+    pub fn ReadMoreThan24Bits(&mut self, source: &Core, n: i32) -> i32 {
         let mut rv;
         if n <= 24 {
             rv = self.ReadBitsNoRefillZero(n);
@@ -89,7 +90,7 @@ impl BitReader {
         rv
     }
 
-    pub fn ReadMoreThan24BitsB(&mut self, source: &KrakenDecoder, n: i32) -> i32 {
+    pub fn ReadMoreThan24BitsB(&mut self, source: &Core, n: i32) -> i32 {
         let mut rv;
         if n <= 24 {
             rv = self.ReadBitsNoRefillZero(n);
@@ -133,7 +134,7 @@ impl BitReader {
     }
 
     // Reads an offset code parametrized by |v|.
-    pub fn ReadDistance(&mut self, source: &KrakenDecoder, v: i32) -> i32 {
+    pub fn ReadDistance(&mut self, source: &Core, v: i32) -> i32 {
         let w;
         let m;
         let n;
@@ -162,7 +163,7 @@ impl BitReader {
     }
 
     // Reads an offset code parametrized by |v|, backwards.
-    pub fn ReadDistanceB(&mut self, source: &KrakenDecoder, v: i32) -> i32 {
+    pub fn ReadDistanceB(&mut self, source: &Core, v: i32) -> i32 {
         let w;
         let m;
         let n;
@@ -192,7 +193,7 @@ impl BitReader {
     }
 
     // Reads a length code.
-    pub fn ReadLength(&mut self, source: &KrakenDecoder) -> i32 {
+    pub fn ReadLength(&mut self, source: &Core) -> i32 {
         let mut n;
         n = self.leading_zeros();
         assert!(n <= 12);
@@ -208,7 +209,7 @@ impl BitReader {
     }
 
     // Reads a length code, backwards.
-    pub fn ReadLengthB(&mut self, source: &KrakenDecoder) -> i32 {
+    pub fn ReadLengthB(&mut self, source: &Core) -> i32 {
         let mut n = self.leading_zeros();
         assert!(n <= 12);
         self.bitpos += n;

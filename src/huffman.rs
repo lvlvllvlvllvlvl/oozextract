@@ -1,4 +1,5 @@
-use crate::{KrakenDecoder, Pointer};
+use crate::core::Core;
+use crate::pointer::Pointer;
 
 pub const BASE_PREFIX: [usize; 12] = [
     0x0, 0x0, 0x2, 0x6, 0xE, 0x1E, 0x3E, 0x7E, 0xFE, 0x1FE, 0x2FE, 0x3FE,
@@ -24,7 +25,7 @@ pub struct HuffReader {
 }
 
 impl HuffReader {
-    pub fn decode_bytes(&mut self, mem: &mut KrakenDecoder, lut: &HuffRevLut) {
+    pub fn decode_bytes(&mut self, mem: &mut Core, lut: &HuffRevLut) {
         let mut src = self.src;
         let mut src_bits = self.src_bits;
         let mut src_bitpos = self.src_bitpos;
