@@ -292,15 +292,14 @@ impl LeviathanLzTable {
 
         let mut cmd_stream_left = 0;
         let mut multi_cmd_stream = [Pointer::null(); 8];
-        let mut cmd_stream_ptr;
+        let mut cmd_stream_ptr = &mut multi_cmd_stream[0];
         if MultiCmd {
-            let base = !dst_start.index + 1;
             for (i, p) in multi_cmd_stream.iter_mut().enumerate() {
-                *p = self.multi_cmd_ptr[(base + i) & 7];
+                *p = self.multi_cmd_ptr[i.wrapping_sub(dst_start.index) & 7];
             }
             cmd_stream_left = self.cmd_stream_size;
-            cmd_stream_ptr = multi_cmd_stream[dst.index & 7];
-            cmd_stream = cmd_stream_ptr;
+            cmd_stream_ptr = &mut multi_cmd_stream[dst.index & 7];
+            cmd_stream = *cmd_stream_ptr;
         }
 
         loop {
@@ -318,6 +317,7 @@ impl LeviathanLzTable {
                 }
                 cmd_stream_left -= 1;
                 cmd = core.get_as_usize(cmd_stream);
+                *cmd_stream_ptr = cmd_stream + 1;
             }
 
             let offs_index = cmd >> 5;
@@ -332,6 +332,7 @@ impl LeviathanLzTable {
 
             // Permute the recent offsets table
             let mut temp = [0; 4];
+
             temp.copy_from_slice(&recent_offs[offs_index + 4..][..4]);
             recent_offs.copy_within(offs_index..offs_index + 4, offs_index + 1);
             recent_offs[offs_index + 5..][..4].copy_from_slice(&temp);
@@ -356,15 +357,15 @@ impl LeviathanLzTable {
                 core.repeat_copy_64(dst, copyfrom, matchlen);
                 dst += matchlen;
                 if MultiCmd {
-                    cmd_stream_ptr = multi_cmd_stream[dst.index & 7];
-                    cmd_stream = cmd_stream_ptr;
+                    cmd_stream_ptr = &mut multi_cmd_stream[dst.index & 7];
+                    cmd_stream = *cmd_stream_ptr;
                 }
             } else {
                 core.repeat_copy_64(dst, copyfrom, matchlen);
                 dst += matchlen;
                 if MultiCmd {
-                    cmd_stream_ptr = multi_cmd_stream[dst.index & 7];
-                    cmd_stream = cmd_stream_ptr;
+                    cmd_stream_ptr = &mut multi_cmd_stream[dst.index & 7];
+                    cmd_stream = *cmd_stream_ptr;
                 }
             }
         }
@@ -423,10 +424,9 @@ impl LeviathanMode for LeviathanModeSub {
         last_offset: i32,
     ) {
         let mut litlen = (cmd >> 3) & 3;
-        let next_len_stream = *len_stream + 1;
         if litlen == 3 {
-            *len_stream = next_len_stream;
             litlen = (core.get_int(*len_stream) & 0xffffff) as usize;
+            *len_stream += 1;
         }
         core.copy_64_add(*dst, self.lit_stream, *dst + last_offset, litlen);
         *dst += litlen;
@@ -466,10 +466,9 @@ impl LeviathanMode for LeviathanModeRaw {
         _: i32,
     ) {
         let mut litlen = (cmd >> 3) & 3;
-        let next_len_stream = *len_stream + 1;
         if litlen == 3 {
-            *len_stream = next_len_stream;
             litlen = (core.get_int(*len_stream) & 0xffffff) as usize;
+            *len_stream += 1;
         }
         core.repeat_copy_64(*dst, self.lit_stream, litlen);
         *dst += litlen;
@@ -510,10 +509,9 @@ impl LeviathanMode for LeviathanModeLamSub {
         }
 
         let mut litlen = lit_cmd >> 3;
-        let next_len_stream = *len_stream + 1;
         if litlen == 3 {
             litlen = (core.get_int(*len_stream) & 0xffffff) as usize;
-            *len_stream = next_len_stream;
+            *len_stream += 1;
         }
 
         assert_ne!(litlen, 0, "lamsub mode requires one literal");
@@ -559,7 +557,11 @@ impl<const NUM: usize> LeviathanModeSubAnd<NUM> {
     const MASK: usize = NUM - 1;
     fn copy_literal(&mut self, core: &mut Core, dst: &mut Pointer, last_offset: i32) {
         let v = &mut self.lit_stream[dst.index & Self::MASK];
-        core.set(*dst, core.get_byte(*v) + core.get_byte(*dst + last_offset));
+        core.set(
+            *dst,
+            core.get_byte(*v)
+                .wrapping_add(core.get_byte(*dst + last_offset)),
+        );
         *v += 1;
         *dst += 1;
     }
@@ -567,9 +569,10 @@ impl<const NUM: usize> LeviathanModeSubAnd<NUM> {
 
 impl<const NUM: usize> LeviathanMode for LeviathanModeSubAnd<NUM> {
     fn new(lzt: &LeviathanLzTable, dst_start: Pointer, _: &mut Core) -> Self {
-        let base = !dst_start.index + 1;
         Self {
-            lit_stream: core::array::from_fn(|i| lzt.lit_stream[(base + i) & Self::MASK]),
+            lit_stream: core::array::from_fn(|i| {
+                lzt.lit_stream[i.wrapping_sub(dst_start.index) & Self::MASK]
+            }),
         }
     }
 

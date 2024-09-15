@@ -140,7 +140,7 @@ impl Core<'_> {
             let mut cmd;
             let mut offs;
             while packed_offs_stream != packed_offs_stream_end {
-                cmd = i32::from(self.get_byte(packed_offs_stream));
+                cmd = self.get_byte(packed_offs_stream) as i32;
                 packed_offs_stream += 1;
                 assert!((cmd >> 3) <= 26, "{}", cmd >> 3);
                 offs = ((8 + (cmd & 7)) << (cmd >> 3)) | bits_a.ReadMoreThan24Bits(self, cmd >> 3);
@@ -204,8 +204,8 @@ impl Core<'_> {
         low_bits: &Pointer,
     ) {
         for i in 0..offs_stream_size {
-            let scaled =
-                scale * self.get_int(offs_stream + i) + i32::from(self.get_byte(low_bits + i));
+            let low = self.get_byte(low_bits + i) as i32;
+            let scaled = scale * self.get_int(offs_stream + i) - low;
             self.set_int(offs_stream + i, scaled)
         }
     }
