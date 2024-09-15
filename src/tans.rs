@@ -36,7 +36,7 @@ impl TansDecoder {
                 if step & 1 == 1 {
                     self.tans_backward_bits(core);
                 }
-                self.tans_backward_round(core, step);
+                self.tans_backward_round(core, step - 5);
             }
             step = (step + 1) % 10;
         }
@@ -82,10 +82,10 @@ impl TansDecoder {
         self.bits_b >>= e.bits_x;
     }
 
-    pub fn init_lut(&self, tans_data: &TansData, l_bits: u32) -> Vec<TansLutEnt> {
+    pub fn init_lut(&self, tans_data: &TansData, l_bits: i32) -> Vec<TansLutEnt> {
         let mut pointers = [0usize; 4];
 
-        let l: u32 = 1 << l_bits;
+        let l = 1 << l_bits;
         let len = l as usize;
         let a_used = tans_data.a_used as usize;
 
@@ -122,12 +122,12 @@ impl TansDecoder {
         }
 
         // Set up the entries with weight >= 2
-        let mut weights_sum = 0u32;
+        let mut weights_sum = 0;
         for i in 0..(tans_data.b_used as usize) {
-            let weight = tans_data.b[i] & 0xffff;
-            let symbol = tans_data.b[i] >> 16;
+            let weight = (tans_data.b[i] & 0xffff) as i32;
+            let symbol = (tans_data.b[i] >> 16) as i32;
             if weight > 4 {
-                let sym_bits = weight.ilog2();
+                let sym_bits = weight.ilog2() as i32;
                 let mut z = l_bits - sym_bits;
                 let mut le = TansLutEnt {
                     symbol: symbol as u8,
@@ -139,7 +139,7 @@ impl TansDecoder {
                 let mut what_to_add = 1 << z;
                 let mut x = (1 << (sym_bits + 1)) - weight;
 
-                for j in 0..4u32 {
+                for j in 0..4 {
                     let mut dst = pointers[j as usize];
 
                     let y = (weight + ((weights_sum - j - 1) & 3)) >> 2;
@@ -182,7 +182,7 @@ impl TansDecoder {
                     let dst = pointers[idx];
                     pointers[idx] += 1;
                     lut[dst].symbol = symbol as u8;
-                    let weight_bits = ww.ilog2();
+                    let weight_bits = ww.ilog2() as i32;
                     lut[dst].bits_x = (l_bits - weight_bits) as u8;
                     lut[dst].x = (1 << (l_bits - weight_bits)) - 1;
                     lut[dst].w = ((l - 1) & (ww << (l_bits - weight_bits))) as u16;
@@ -194,7 +194,8 @@ impl TansDecoder {
         lut
     }
 
-    pub fn decode_table(core: &mut Core, bits: &mut BitReader, l_bits: i32) -> Option<TansData> {
+    /// Tans_DecodeTable
+    pub fn decode_table(core: &mut Core, bits: &mut BitReader, l_bits: i32) -> TansData {
         let mut tans_data = TansData {
             a_used: 0,
             b_used: 0,
@@ -205,9 +206,7 @@ impl TansDecoder {
         if bits.ReadBitNoRefill() {
             let q = bits.ReadBitsNoRefill(3);
             let num_symbols = bits.ReadBitsNoRefill(8) + 1;
-            if num_symbols < 2 {
-                return None;
-            }
+            assert!(num_symbols >= 2);
             let fluff = bits.ReadFluff(num_symbols);
             let total_rice_values = num_symbols as usize + fluff;
             let mut rice = [0; 512 + 16];
@@ -229,12 +228,7 @@ impl TansDecoder {
             bits.bits <<= br2.bitpos;
             bits.bitpos += br2.bitpos as i32;
 
-            let range = core.Huff_ConvertToRanges(
-                num_symbols as u16,
-                fluff,
-                &rice[num_symbols as usize..],
-                bits,
-            );
+            let range = core.Huff_ConvertToRanges(num_symbols, fluff, &rice, bits);
 
             bits.Refill(core);
 
@@ -245,16 +239,14 @@ impl TansDecoder {
             let mut tanstable_a: &mut [u8] = &mut tans_data.a;
             let mut tanstable_b: &mut [u32] = &mut tans_data.b;
 
-            for ri in range[..fluff].iter() {
+            for ri in range {
                 let mut symbol = ri.symbol as i32;
                 for _ in 0..ri.num {
                     bits.Refill(core);
 
                     let nextra = cur_rice_ptr[0] as i32 + q;
                     cur_rice_ptr = &cur_rice_ptr[1..];
-                    if nextra > 15 {
-                        return None;
-                    }
+                    assert!(nextra <= 15);
                     let mut v = bits.ReadBitsNoRefillZero(nextra) + (1 << nextra) - (1 << q);
 
                     let average_div4 = average >> 2;
@@ -281,11 +273,9 @@ impl TansDecoder {
             }
             tans_data.a_used = (256 - tanstable_a.len()) as _;
             tans_data.b_used = (256 - tanstable_b.len()) as _;
-            if somesum != l {
-                return None;
-            }
+            assert_eq!(somesum, l);
 
-            Some(tans_data)
+            tans_data
         } else {
             let mut seen = [false; 256];
             let l = 1 << l_bits;
@@ -295,9 +285,8 @@ impl TansDecoder {
             let bits_per_sym = l_bits.ilog2() + 1;
             let max_delta_bits = bits.ReadBitsNoRefill(bits_per_sym as i32);
 
-            if max_delta_bits == 0 || max_delta_bits > l_bits {
-                return None;
-            }
+            assert_ne!(max_delta_bits, 0);
+            assert!(max_delta_bits <= l_bits);
 
             let mut tanstable_a: &mut [u8] = &mut tans_data.a;
             let mut tanstable_b: &mut [u32] = &mut tans_data.b;
@@ -309,17 +298,13 @@ impl TansDecoder {
                 bits.Refill(core);
 
                 let sym = bits.ReadBitsNoRefill(8);
-                if seen[sym as usize] {
-                    return None;
-                }
+                assert!(!seen[sym as usize], "{}", sym);
 
                 let delta = bits.ReadBitsNoRefill(max_delta_bits);
 
                 weight += delta;
 
-                if weight == 0 {
-                    return None;
-                }
+                assert_ne!(weight, 0);
 
                 seen[sym as usize] = true;
                 if weight == 1 {
@@ -336,13 +321,10 @@ impl TansDecoder {
             bits.Refill(core);
 
             let sym = bits.ReadBitsNoRefill(8);
-            if seen[sym as usize] {
-                return None;
-            }
+            assert!(!seen[sym as usize], "{}", sym);
 
-            if l - total_weights < weight || l - total_weights <= 1 {
-                return None;
-            }
+            assert!(l - total_weights >= weight);
+            assert!(l - total_weights > 1);
 
             tanstable_b[0] = ((sym << 16) + (l - total_weights)) as u32;
             tanstable_b = &mut tanstable_b[1..];
@@ -355,7 +337,7 @@ impl TansDecoder {
             tans_data.a[..a_used].sort_unstable();
             tans_data.b[..b_used].sort_unstable();
 
-            Some(tans_data)
+            tans_data
         }
     }
 }
