@@ -196,8 +196,6 @@ impl MermaidLzTable {
             let cmd = core.get_as_usize(cmd_stream);
             cmd_stream += 1;
             if cmd >= 24 {
-                let new_dist = *self.off16_stream.front().unwrap_or(&0) as i32;
-                let use_distance = (cmd >> 7) as i32 - 1;
                 let litlen = cmd & 7;
                 if ADD {
                     core.copy_64_add(dst, lit_stream, dst + recent_offs, litlen);
@@ -206,9 +204,8 @@ impl MermaidLzTable {
                 }
                 dst += litlen;
                 lit_stream += litlen;
-                recent_offs ^= use_distance & (recent_offs ^ -new_dist);
-                if use_distance & 2 == 2 {
-                    self.off16_stream.pop_front().unwrap();
+                if (cmd >> 7) == 0 {
+                    recent_offs = -(self.off16_stream.pop_front().unwrap() as i32);
                 }
                 offs_ptr = dst + recent_offs;
                 core.repeat_copy_64(dst, offs_ptr, (cmd >> 3) & 0xF);
@@ -260,9 +257,8 @@ impl MermaidLzTable {
                 recent_offs = offs_ptr.index as i32 - dst.index as i32;
                 core.repeat_copy_64(dst, offs_ptr, length);
                 dst += length;
-            } else
-            /* flag == 2 */
-            {
+            } else {
+                /* flag == 2 */
                 assert_ne!(src_end - length_stream, 0);
                 length = core.get_as_usize(length_stream);
                 if length > 251 {
@@ -288,6 +284,7 @@ impl MermaidLzTable {
         } else {
             core.repeat_copy_64(dst, lit_stream, length);
         }
+        lit_stream += length;
 
         *saved_dist = recent_offs;
         self.length_stream = length_stream;
