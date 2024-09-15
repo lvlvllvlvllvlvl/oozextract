@@ -364,7 +364,7 @@ mod tests {
             let path = path.unwrap().path();
             let filename = path.file_stem().unwrap().to_str().unwrap().to_string();
             let extension = path.extension().unwrap().to_str().unwrap().to_string();
-            if filename != "dickens" || extension != "leviathan" {
+            if filename != "mozilla" || extension != "leviathan" {
                 continue;
             }
             log::info!("Extracting {}.{}", filename, extension);

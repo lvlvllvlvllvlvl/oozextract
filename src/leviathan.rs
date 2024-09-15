@@ -157,8 +157,8 @@ impl LeviathanLzTable {
                 true,
                 scratch,
             );
-            lztable.lit_stream[0] = out;
-            lztable.lit_stream_size[0] = decode_count;
+            lztable.lit_stream.push(out);
+            lztable.lit_stream_size.push(decode_count);
         } else {
             let array_count = if chunk_type == 2 {
                 2
@@ -326,14 +326,7 @@ impl LeviathanLzTable {
 
             recent_offs[15] = core.get_int(offs_stream);
 
-            mode.CopyLiterals(
-                core,
-                cmd,
-                &mut dst,
-                &mut len_stream,
-                match_zone_end,
-                offset as usize,
-            );
+            mode.CopyLiterals(core, cmd, &mut dst, &mut len_stream, match_zone_end, offset);
 
             offset = recent_offs[offs_index + 8];
 
@@ -359,19 +352,15 @@ impl LeviathanLzTable {
                 assert!(len_stream < len_stream_end, "len stream empty");
                 len_stream_end = len_stream_end - 1;
                 matchlen = (core.get_int(len_stream_end) + 6) as usize;
-                core.repeat_copy_64(dst, copyfrom, 16);
-                let next_dst = dst + matchlen;
+                assert!(matchlen <= (dst_end - 8 - dst), "no space in buf");
+                core.repeat_copy_64(dst, copyfrom, matchlen);
+                dst += matchlen;
                 if MultiCmd {
-                    cmd_stream_ptr = multi_cmd_stream[next_dst.index & 7];
+                    cmd_stream_ptr = multi_cmd_stream[dst.index & 7];
                     cmd_stream = cmd_stream_ptr;
                 }
-                if matchlen > 16 {
-                    assert!(matchlen <= (dst_end - 8 - dst), "no space in buf");
-                    core.repeat_copy_64(dst, copyfrom, matchlen);
-                }
-                dst = next_dst;
             } else {
-                core.repeat_copy_64(dst, copyfrom, 8);
+                core.repeat_copy_64(dst, copyfrom, matchlen);
                 dst += matchlen;
                 if MultiCmd {
                     cmd_stream_ptr = multi_cmd_stream[dst.index & 7];
@@ -386,7 +375,7 @@ impl LeviathanLzTable {
 
         // copy final literals
         if dst < dst_end {
-            mode.CopyFinalLiterals(core, dst_end - dst, &mut dst, offset as usize);
+            mode.CopyFinalLiterals(core, dst_end - dst, &mut dst, offset);
         } else {
             assert_eq!(dst, dst_end);
         }
@@ -402,7 +391,7 @@ pub trait LeviathanMode {
         dst: &mut Pointer,
         len_stream: &mut IntPointer,
         match_zone_end: Pointer,
-        last_offset: usize,
+        last_offset: i32,
     );
 
     fn CopyFinalLiterals(
@@ -410,7 +399,7 @@ pub trait LeviathanMode {
         core: &mut Core,
         final_len: usize,
         dst: &mut Pointer,
-        last_offset: usize,
+        last_offset: i32,
     );
 }
 
@@ -431,7 +420,7 @@ impl LeviathanMode for LeviathanModeSub {
         dst: &mut Pointer,
         len_stream: &mut IntPointer,
         _: Pointer,
-        last_offset: usize,
+        last_offset: i32,
     ) {
         let mut litlen = (cmd >> 3) & 3;
         let next_len_stream = *len_stream + 1;
@@ -449,7 +438,7 @@ impl LeviathanMode for LeviathanModeSub {
         core: &mut Core,
         final_len: usize,
         dst: &mut Pointer,
-        last_offset: usize,
+        last_offset: i32,
     ) {
         core.copy_64_add(*dst, self.lit_stream, *dst + last_offset, final_len);
         *dst += final_len;
@@ -474,7 +463,7 @@ impl LeviathanMode for LeviathanModeRaw {
         dst: &mut Pointer,
         len_stream: &mut IntPointer,
         _: Pointer,
-        _: usize,
+        _: i32,
     ) {
         let mut litlen = (cmd >> 3) & 3;
         let next_len_stream = *len_stream + 1;
@@ -487,13 +476,7 @@ impl LeviathanMode for LeviathanModeRaw {
         self.lit_stream += litlen;
     }
 
-    fn CopyFinalLiterals(
-        &mut self,
-        core: &mut Core,
-        final_len: usize,
-        dst: &mut Pointer,
-        _: usize,
-    ) {
+    fn CopyFinalLiterals(&mut self, core: &mut Core, final_len: usize, dst: &mut Pointer, _: i32) {
         core.repeat_copy_64(*dst, self.lit_stream, final_len);
         *dst += final_len;
     }
@@ -519,27 +502,31 @@ impl LeviathanMode for LeviathanModeLamSub {
         dst: &mut Pointer,
         len_stream: &mut IntPointer,
         match_zone_end: Pointer,
-        last_offset: usize,
+        last_offset: i32,
     ) {
         let lit_cmd = cmd & 0x18;
-        assert_ne!(lit_cmd, 0);
+        if lit_cmd == 0 {
+            return;
+        }
 
         let mut litlen = lit_cmd >> 3;
         let next_len_stream = *len_stream + 1;
         if litlen == 3 {
-            *len_stream = next_len_stream;
             litlen = (core.get_int(*len_stream) & 0xffffff) as usize;
+            *len_stream = next_len_stream;
         }
 
         assert_ne!(litlen, 0, "lamsub mode requires one literal");
+        assert!(litlen < match_zone_end - *dst, "out of bounds");
         litlen -= 1;
 
-        let lam_byte = core.get_byte(self.lam_lit_stream) + core.get_byte(*dst + last_offset);
+        let lam_byte = core
+            .get_byte(self.lam_lit_stream)
+            .wrapping_add(core.get_byte(*dst + last_offset));
         core.set(*dst, lam_byte);
         self.lam_lit_stream += 1;
         *dst += 1;
 
-        litlen = litlen.min(match_zone_end - *dst);
         core.copy_64_add(*dst, self.lit_stream, *dst + last_offset, litlen);
         *dst += litlen;
         self.lit_stream += litlen;
@@ -550,9 +537,11 @@ impl LeviathanMode for LeviathanModeLamSub {
         core: &mut Core,
         mut final_len: usize,
         dst: &mut Pointer,
-        last_offset: usize,
+        last_offset: i32,
     ) {
-        let lam_byte = core.get_byte(self.lam_lit_stream) + core.get_byte(*dst + last_offset);
+        let lam_byte = core
+            .get_byte(self.lam_lit_stream)
+            .wrapping_add(core.get_byte(*dst + last_offset));
         core.set(*dst, lam_byte);
         self.lam_lit_stream += 1;
         *dst += 1;
@@ -568,7 +557,7 @@ struct LeviathanModeSubAnd<const NUM: usize> {
 
 impl<const NUM: usize> LeviathanModeSubAnd<NUM> {
     const MASK: usize = NUM - 1;
-    fn copy_literal(&mut self, core: &mut Core, dst: &mut Pointer, last_offset: usize) {
+    fn copy_literal(&mut self, core: &mut Core, dst: &mut Pointer, last_offset: i32) {
         let v = &mut self.lit_stream[dst.index & Self::MASK];
         core.set(*dst, core.get_byte(*v) + core.get_byte(*dst + last_offset));
         *v += 1;
@@ -591,7 +580,7 @@ impl<const NUM: usize> LeviathanMode for LeviathanModeSubAnd<NUM> {
         dst: &mut Pointer,
         len_stream: &mut IntPointer,
         match_zone_end: Pointer,
-        last_offset: usize,
+        last_offset: i32,
     ) {
         let lit_cmd = cmd & 0x18;
         if lit_cmd == 0x18 {
@@ -614,7 +603,7 @@ impl<const NUM: usize> LeviathanMode for LeviathanModeSubAnd<NUM> {
         core: &mut Core,
         final_len: usize,
         dst: &mut Pointer,
-        last_offset: usize,
+        last_offset: i32,
     ) {
         for _ in 0..final_len {
             self.copy_literal(core, dst, last_offset);
@@ -644,7 +633,7 @@ impl LeviathanMode for LeviathanModeO1 {
         dst: &mut Pointer,
         len_stream: &mut IntPointer,
         _: Pointer,
-        _: usize,
+        _: i32,
     ) {
         let lit_cmd = cmd & 0x18;
         if lit_cmd == 0x18 {
@@ -665,13 +654,7 @@ impl LeviathanMode for LeviathanModeO1 {
         }
     }
 
-    fn CopyFinalLiterals(
-        &mut self,
-        core: &mut Core,
-        final_len: usize,
-        dst: &mut Pointer,
-        _: usize,
-    ) {
+    fn CopyFinalLiterals(&mut self, core: &mut Core, final_len: usize, dst: &mut Pointer, _: i32) {
         self.context = core.get_byte(*dst - 1);
         for _ in 0..final_len {
             self.copy_literal(core, dst);

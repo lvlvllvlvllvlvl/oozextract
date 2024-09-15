@@ -64,8 +64,8 @@ impl Pointer {
         }
     }
     pub fn debug(&self, n: usize) {
-        let bad_byte = usize::MAX;
-        if self.into == PointerDest::Temp && self.index <= bad_byte && self.index + n > bad_byte {
+        let bad_byte = 130713;
+        if self.into == PointerDest::Output && self.index <= bad_byte && self.index + n > bad_byte {
             log::debug!("breakpoint here")
         }
     }

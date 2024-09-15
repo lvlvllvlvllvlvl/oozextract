@@ -949,7 +949,7 @@ impl Core<'_> {
                 false,
                 scratch_cur,
             );
-            assert_eq!(size_out, num_indexes);
+            assert_eq!(size_out, lenlog2_chunksize);
             src += n;
 
             for i in 0..lenlog2_chunksize {
@@ -1186,7 +1186,7 @@ impl Core<'_> {
 
         while cmd_ptr < cmd_ptr_end {
             let cmd = self.get_as_usize(cmd_ptr_end - 1);
-            if cmd > 0x2f {
+            if cmd == 0 || cmd > 0x2f {
                 cmd_ptr_end -= 1;
                 let bytes_to_copy = !cmd & 0xF;
                 let bytes_to_rle = cmd >> 4;
