@@ -7,6 +7,7 @@ mod core;
 pub mod huffman;
 pub mod kraken;
 mod leviathan;
+mod mermaid;
 mod pointer;
 pub mod tans;
 
@@ -16,6 +17,7 @@ use std::panic::Location;
 
 use crate::core::Core;
 use crate::leviathan::Leviathan;
+use crate::mermaid::Mermaid;
 pub use kraken::*;
 
 #[derive(Debug)]
@@ -176,7 +178,9 @@ impl<In: Read + Seek> Extractor<In> {
                     DecoderType::Kraken => {
                         Core::new(input, output).decode_quantum(offset, dst_bytes_left, Kraken)
                     }
-                    DecoderType::Mermaid => compressed_size,
+                    DecoderType::Mermaid => {
+                        Core::new(input, output).decode_quantum(offset, dst_bytes_left, Mermaid)
+                    }
                     DecoderType::Bitknit => compressed_size,
                     DecoderType::Leviathan => {
                         Core::new(input, output).decode_quantum(offset, dst_bytes_left, Leviathan)
@@ -378,7 +382,7 @@ mod tests {
             let mut extractor = Extractor::new(file);
             extractor.read_exact(buf).unwrap();
 
-            if extension == "kraken" || extension == "leviathan" {
+            if extension == "kraken" || extension == "leviathan" || extension == "mermaid" {
                 let verify_file = format!("verify/{}", filename);
                 log::debug!("compare to file {}", verify_file);
                 let expected = std::fs::read(verify_file).unwrap();
