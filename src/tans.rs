@@ -46,7 +46,7 @@ impl TansDecoder {
             self.ptr_f
         );
 
-        let states_or = self.state.iter().map(|v| *v).reduce(|l, r| l | r).unwrap();
+        let states_or = self.state.iter().fold(0, |l, &r| l | r);
         assert_eq!(states_or & !0xFF, 0, "{:X}", states_or);
 
         core.set_bytes(self.dst_end, &self.state.map(|s| s as u8));
@@ -92,11 +92,20 @@ impl TansDecoder {
         let slots_left_to_alloc = len - a_used;
 
         let sa = slots_left_to_alloc >> 2;
-        let mut sb = sa + ((slots_left_to_alloc & 3) > 0).then_some(1).unwrap_or(0);
+        let mut sb = sa;
+        if (slots_left_to_alloc & 3) > 0 {
+            sb += 1;
+        }
         pointers[1] = sb;
-        sb += sa + ((slots_left_to_alloc & 3) > 1).then_some(1).unwrap_or(0);
+        sb += sa;
+        if (slots_left_to_alloc & 3) > 1 {
+            sb += 1;
+        }
         pointers[2] = sb;
-        sb += sa + ((slots_left_to_alloc & 3) > 2).then_some(1).unwrap_or(0);
+        sb += sa;
+        if (slots_left_to_alloc & 3) > 2 {
+            sb += 1;
+        }
         pointers[3] = sb;
 
         let mut lut = Vec::with_capacity(len);
@@ -120,11 +129,12 @@ impl TansDecoder {
             if weight > 4 {
                 let sym_bits = weight.ilog2();
                 let mut z = l_bits - sym_bits;
-                let mut le = TansLutEnt::default();
-                le.symbol = symbol as u8;
-                le.bits_x = z as u8;
-                le.x = (1 << z) - 1;
-                le.w = ((l - 1) & (weight << z)) as u16;
+                let mut le = TansLutEnt {
+                    symbol: symbol as u8,
+                    bits_x: z as u8,
+                    x: (1 << z) - 1,
+                    w: ((l - 1) & (weight << z)) as u16,
+                };
 
                 let mut what_to_add = 1 << z;
                 let mut x = (1 << (sym_bits + 1)) - weight;
@@ -209,9 +219,7 @@ impl TansDecoder {
                 bitpos: ((bits.bitpos - 24) & 7) as u32,
             };
 
-            if !core.DecodeGolombRiceLengths(&mut rice[..total_rice_values], &mut br2) {
-                return None;
-            }
+            core.DecodeGolombRiceLengths(&mut rice[..total_rice_values], &mut br2);
 
             // Switch back to other bitreader impl
             bits.bitpos = 24;
@@ -226,7 +234,7 @@ impl TansDecoder {
                 fluff,
                 &rice[num_symbols as usize..],
                 bits,
-            )?;
+            );
 
             bits.Refill(core);
 
@@ -237,9 +245,9 @@ impl TansDecoder {
             let mut tanstable_a: &mut [u8] = &mut tans_data.a;
             let mut tanstable_b: &mut [u32] = &mut tans_data.b;
 
-            for ri in 0..fluff {
-                let mut symbol = range[ri].symbol as i32;
-                for _ in 0..range[ri].num {
+            for ri in range[..fluff].iter() {
+                let mut symbol = ri.symbol as i32;
+                for _ in 0..ri.num {
                     bits.Refill(core);
 
                     let nextra = cur_rice_ptr[0] as i32 + q;

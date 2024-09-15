@@ -180,7 +180,7 @@ pub struct HuffRevLut {
 }
 
 impl HuffRevLut {
-    pub fn make_lut(prefix_cur: &[usize; 12], syms: &[u8; 1280]) -> Option<HuffRevLut> {
+    pub fn make_lut(prefix_cur: &[usize; 12], syms: &[u8; 1280]) -> HuffRevLut {
         let mut bits2len = [0u8; 2048 + 16];
         let mut bits2sym = [0u8; 2048 + 16];
         let mut currslot = 0;
@@ -190,9 +190,7 @@ impl HuffRevLut {
             if count != 0 {
                 let stepsize = 1 << (11 - i);
                 let num_to_set = count << (11 - i);
-                if currslot + num_to_set > 2048 {
-                    return None;
-                }
+                assert!(currslot + num_to_set <= 2048);
                 bits2len[currslot..][..num_to_set].fill(i);
 
                 for j in 0..count {
@@ -204,19 +202,18 @@ impl HuffRevLut {
         }
         if prefix_cur[11] - BASE_PREFIX[11] != 0 {
             let num_to_set = prefix_cur[11] - BASE_PREFIX[11];
-            if currslot + num_to_set > 2048 {
-                return None;
-            }
+            assert!(currslot + num_to_set <= 2048);
             bits2len[currslot..][..num_to_set].fill(11);
             bits2sym[currslot..][..num_to_set]
                 .copy_from_slice(&syms[BASE_PREFIX[11]..][..num_to_set]);
             currslot += num_to_set;
         }
 
-        (currslot == 2048).then_some(HuffRevLut {
+        assert_eq!(currslot, 2048);
+        HuffRevLut {
             bits2len: reverse_lut(bits2len),
             bits2sym: reverse_lut(bits2sym),
-        })
+        }
     }
 }
 

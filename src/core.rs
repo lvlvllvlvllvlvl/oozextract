@@ -255,7 +255,7 @@ impl Core<'_> {
 
         // In all the other modes, the initial bytes encode
         // the src_size and the dst_size
-        if self.get_as_usize(src + 0) >= 0x80 {
+        if self.get_byte(src) >= 0x80 {
             assert!(src_end - src >= 3, "too few bytes {}", src_end - src);
 
             // short mode, 10 bit sizes
@@ -329,9 +329,7 @@ impl Core<'_> {
         if !bits.ReadBitNoRefill() {
             num_syms = self.Huff_ReadCodeLengthsOld(&mut bits, &mut syms, &mut code_prefix);
         } else if !bits.ReadBitNoRefill() {
-            num_syms = self
-                .Huff_ReadCodeLengthsNew(&mut bits, &mut syms, &mut code_prefix)
-                .unwrap();
+            num_syms = self.Huff_ReadCodeLengthsNew(&mut bits, &mut syms, &mut code_prefix);
         } else {
             panic!();
         }
@@ -342,10 +340,10 @@ impl Core<'_> {
             return src - src_end;
         }
 
-        let rev_lut = HuffRevLut::make_lut(&code_prefix, &syms).unwrap();
+        let rev_lut = HuffRevLut::make_lut(&code_prefix, &syms);
 
         if chunk_type == 1 {
-            assert!(src + 3 <= src_end, "{:?} {:?}", src, src_end);
+            assert!(src_end - src >= 3, "{}", src_end - src);
             split_mid = self.get_bytes_as_usize_le(src, 2);
             src += 2;
             let mut hr = HuffReader {
@@ -359,7 +357,7 @@ impl Core<'_> {
             };
             hr.decode_bytes(self, &rev_lut);
         } else {
-            assert!(src + 6 <= src_end, "{:?} {:?}", src, src_end);
+            assert!(src_end - src >= 6, "{}", src_end - src);
 
             half_output_size = (output_size + 1) >> 1;
             split_mid = self.get_bytes_as_usize_le(src, 3);
@@ -494,7 +492,7 @@ impl Core<'_> {
         bits: &mut BitReader,
         syms: &mut [u8; 1280],
         code_prefix: &mut [usize; 12],
-    ) -> Option<i32> {
+    ) -> i32 {
         let forced_bits = bits.ReadBitsNoRefill(2);
 
         let num_symbols = bits.ReadBitsNoRefill(8) + 1;
@@ -508,16 +506,12 @@ impl Core<'_> {
             p: bits.p - ((24 - bits.bitpos + 7) >> 3) as u32,
         };
 
-        if !self.DecodeGolombRiceLengths(&mut code_len[..num_symbols as usize + fluff], &mut br2) {
-            return None;
-        }
-        if !self.DecodeGolombRiceBits(
+        self.DecodeGolombRiceLengths(&mut code_len[..num_symbols as usize + fluff], &mut br2);
+        self.DecodeGolombRiceBits(
             &mut code_len[..usize::try_from(num_symbols).unwrap()],
-            forced_bits as u32,
+            forced_bits as usize,
             &mut br2,
-        ) {
-            return None;
-        }
+        );
 
         // Reset the bits decoder.
         bits.bitpos = 24;
@@ -528,17 +522,15 @@ impl Core<'_> {
         bits.bitpos += br2.bitpos as i32;
 
         let mut running_sum = 0x1e;
-        for len in code_len.iter_mut() {
-            let mut v = *len;
+        for len in code_len[..num_symbols as usize].iter_mut() {
+            let mut v = *len as i32;
             v = (!(v & 1) + 1) ^ (v >> 1);
-            *len = v + (running_sum >> 2) + 1;
-            if *len < 1 || *len > 11 {
-                return None;
-            }
+            *len = (v + (running_sum >> 2) + 1) as u8;
+            assert!(*len >= 1 && *len <= 11);
             running_sum += v;
         }
 
-        let ranges = self.Huff_ConvertToRanges(num_symbols as u16, fluff, &code_len, bits)?;
+        let ranges = self.Huff_ConvertToRanges(num_symbols as u16, fluff, &code_len, bits);
 
         let mut cp = 0;
         for range in ranges {
@@ -551,10 +543,10 @@ impl Core<'_> {
             cp += range.num as usize;
         }
 
-        Some(num_symbols)
+        num_symbols
     }
 
-    pub fn DecodeGolombRiceLengths(&self, mut dst: &mut [u8], br: &mut BitReader2) -> bool {
+    pub fn DecodeGolombRiceLengths(&self, mut dst: &mut [u8], br: &mut BitReader2) {
         const K_RICE_CODE_BITS2VALUE: [u32; 256] = [
             0x80000000, 0x00000007, 0x10000006, 0x00000006, 0x20000005, 0x00000105, 0x10000005,
             0x00000005, 0x30000004, 0x00000204, 0x10000104, 0x00000104, 0x20000004, 0x00010004,
@@ -609,9 +601,7 @@ impl Core<'_> {
 
         let mut p = br.p;
         let p_end = br.p_end;
-        if p >= p_end {
-            return false;
-        }
+        assert!(p < p_end);
 
         let mut count = -(br.bitpos as i32);
         let mut v = self.get_as_usize(p) & (255 >> br.bitpos);
@@ -621,18 +611,15 @@ impl Core<'_> {
                 count += 8;
             } else {
                 let x = K_RICE_CODE_BITS2VALUE[v] as i32;
-                let bytes = [
-                    (count + (x & 0x0f0f0f0f)).to_le_bytes(),
-                    ((x >> 4) & 0x0f0f0f0f).to_le_bytes(),
-                ]
-                .concat();
-                if bytes.len() > dst.len() {
-                    dst.copy_from_slice(&bytes[..dst.len()]);
-                } else {
-                    dst[..8].copy_from_slice(&bytes);
+                let len = dst.len().min(4);
+                dst[..len].copy_from_slice(&(count + (x & 0x0f0f0f0f)).to_le_bytes()[..len]);
+                if dst.len() > 4 {
+                    let dst = &mut dst[4..];
+                    let len = dst.len().min(4);
+                    dst[..len].copy_from_slice(&((x >> 4) & 0x0f0f0f0f).to_le_bytes()[..len]);
                 }
                 let step = K_RICE_CODE_BITS2LEN[v] as usize;
-                if dst.len() >= step {
+                if dst.len() <= step {
                     // went too far, step back
                     for _ in dst.len()..step {
                         v &= v - 1;
@@ -642,27 +629,25 @@ impl Core<'_> {
                 dst = &mut dst[step..];
                 count = x >> 28;
             }
-            if p >= p_end {
-                return false;
-            }
+            assert!(p < p_end);
             v = self.get_byte(p) as _;
             p += 1;
         }
         // step back if byte not finished
         let mut bitpos = 0;
-        if (v & 1) != 0 {
-            p -= 1;
+        if (v & 1) == 0 {
+            assert_ne!(v, 0);
             bitpos = 8 - v.trailing_zeros();
+            p -= 1;
         }
         br.p = p;
         br.bitpos = bitpos;
-        true
     }
 
     fn DecodeGolombRiceBits(
         &mut self,
         mut dst: &mut [u8],
-        bitcount: u32,
+        bitcount: usize,
         br: &mut BitReader2,
     ) -> bool {
         if bitcount == 0 {
@@ -671,7 +656,7 @@ impl Core<'_> {
         let mut p = br.p;
         let bitpos = br.bitpos;
 
-        let bits_required = ((bitpos + bitcount) as usize) * dst.len();
+        let bits_required = bitpos as usize + bitcount * dst.len();
         let bytes_required = (bits_required + 7) >> 3;
         if bytes_required > br.p_end - p {
             return false;
@@ -717,11 +702,11 @@ impl Core<'_> {
                 }
                 _ => panic!(),
             };
-            let len = dst.len().max(8);
+            let len = dst.len().min(8);
             let mut bytes = dst[..len].to_vec();
             bytes.resize(8, 0);
             let v = (u64::from_le_bytes(bytes.try_into().unwrap()) << bitcount) + bits.swap_bytes();
-            dst.copy_from_slice(&v.to_le_bytes()[..len]);
+            dst[..len].copy_from_slice(&v.to_le_bytes()[..len]);
             dst = &mut dst[len..];
         }
         true
@@ -733,18 +718,16 @@ impl Core<'_> {
         p: usize,
         symlen: &[u8],
         bits: &mut BitReader,
-    ) -> Option<Vec<HuffRange>> {
+    ) -> Vec<HuffRange> {
         let mut symbol = 0;
-        let mut idx = 0;
+        let mut idx = num_symbols as usize;
 
         // Start with space?
         if p & 1 != 0 {
             bits.Refill(self);
             let v = symlen[idx] as i32;
             idx += 1;
-            if v >= 8 {
-                return None;
-            }
+            assert!(v < 8);
             symbol = u16::try_from(bits.ReadBitsNoRefill(v + 1) + (1 << (v + 1)) - 1).unwrap();
         }
 
@@ -756,31 +739,27 @@ impl Core<'_> {
             bits.Refill(self);
             let v = symlen[idx] as i32;
             idx += 1;
-            if v >= 9 {
-                return None;
-            }
+            assert!(v < 9);
             let num = u16::try_from(bits.ReadBitsNoRefillZero(v) + (1 << v)).unwrap();
             let v = symlen[idx] as i32;
             idx += 1;
-            if v >= 8 {
-                return None;
-            }
+            assert!(v < 8);
             let space = u16::try_from(bits.ReadBitsNoRefill(v + 1) + (1 << (v + 1)) - 1).unwrap();
             ranges.push(HuffRange { symbol, num });
             syms_used += num;
             symbol += num + space;
         }
 
-        if symbol >= 256 || syms_used >= num_symbols || symbol + num_symbols - syms_used > 256 {
-            return None;
-        }
+        assert!(symbol < 256);
+        assert!(syms_used < num_symbols);
+        assert!(symbol + num_symbols - syms_used <= 256);
 
         ranges.push(HuffRange {
             symbol,
             num: num_symbols - syms_used,
         });
 
-        Some(ranges)
+        ranges
     }
 
     fn Krak_DecodeRecursive(
@@ -799,12 +778,13 @@ impl Core<'_> {
             return None;
         }
 
-        let n = self.get_as_usize(src) & 0x7f;
+        let byte = self.get_as_usize(src);
+        let n = byte & 0x7f;
         if n < 2 {
             return None;
         }
 
-        if (self.get_byte(src) & 0x80) != 0 {
+        if (byte & 0x80) == 0 {
             src += 1;
             for _ in 0..n {
                 let mut decoded_size = 0;
