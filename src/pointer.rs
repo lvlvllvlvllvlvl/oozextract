@@ -7,6 +7,7 @@ pub enum PointerDest {
     Input,
     Output,
     Scratch,
+    Temp,
 }
 
 impl PartialOrd for PointerDest {
@@ -44,6 +45,12 @@ impl Pointer {
             index,
         }
     }
+    pub fn tmp(index: usize) -> Self {
+        Pointer {
+            into: PointerDest::Temp,
+            index,
+        }
+    }
     pub fn null() -> Pointer {
         Default::default()
     }
@@ -57,8 +64,8 @@ impl Pointer {
         }
     }
     pub fn debug(&self, n: usize) {
-        let bad_byte = 34184;
-        if self.into == PointerDest::Output && self.index <= bad_byte && self.index + n > bad_byte {
+        let bad_byte = usize::MAX;
+        if self.into == PointerDest::Temp && self.index <= bad_byte && self.index + n > bad_byte {
             log::debug!("breakpoint here")
         }
     }
@@ -264,6 +271,7 @@ impl Core<'_> {
             input,
             output,
             scratch: Vec::new(),
+            tmp: Vec::new(),
         }
     }
     pub fn get_byte(&self, p: Pointer) -> u8 {
@@ -272,6 +280,7 @@ impl Core<'_> {
             PointerDest::Input => self.input[p.index],
             PointerDest::Output => self.output[p.index],
             PointerDest::Scratch => self.scratch[p.index],
+            PointerDest::Temp => self.tmp[p.index],
         }
     }
     pub fn get_as_usize(&self, p: Pointer) -> usize {
@@ -288,6 +297,10 @@ impl Core<'_> {
             PointerDest::Scratch => {
                 self.ensure_scratch(p.index + n);
                 &self.scratch[p.index..p.index + n]
+            }
+            PointerDest::Temp => {
+                self.ensure_tmp(p.index + n);
+                &self.tmp[p.index..p.index + n]
             }
         }
     }
@@ -313,6 +326,12 @@ impl Core<'_> {
         }
     }
 
+    pub fn ensure_tmp(&mut self, size: usize) {
+        if self.tmp.len() < size {
+            self.tmp.resize(size, 0);
+        }
+    }
+
     pub fn set(&mut self, p: Pointer, v: u8) {
         p.debug(1);
         match p.into {
@@ -322,6 +341,10 @@ impl Core<'_> {
             PointerDest::Scratch => {
                 self.ensure_scratch(p.index + 1);
                 self.scratch[p.index] = v
+            }
+            PointerDest::Temp => {
+                self.ensure_tmp(p.index + 1);
+                self.tmp[p.index] = v
             }
         }
     }
@@ -338,6 +361,10 @@ impl Core<'_> {
                 self.ensure_scratch(p.index + 4);
                 self.scratch[p.index..p.index + 4].copy_from_slice(&v.to_le_bytes())
             }
+            PointerDest::Temp => {
+                self.ensure_tmp(p.index + 4);
+                self.tmp[p.index..p.index + 4].copy_from_slice(&v.to_le_bytes())
+            }
         }
     }
 
@@ -350,6 +377,10 @@ impl Core<'_> {
             PointerDest::Scratch => {
                 self.ensure_scratch(p.index + v.len());
                 self.scratch[p.index..p.index + v.len()].copy_from_slice(v)
+            }
+            PointerDest::Temp => {
+                self.ensure_tmp(p.index + v.len());
+                self.tmp[p.index..p.index + v.len()].copy_from_slice(v)
             }
         }
     }
@@ -364,7 +395,14 @@ impl Core<'_> {
                 PointerDest::Null => panic!(),
                 PointerDest::Input => panic!(),
                 PointerDest::Output => self.output,
-                PointerDest::Scratch => &mut self.scratch,
+                PointerDest::Scratch => {
+                    self.ensure_scratch(dest.index + bytes);
+                    &mut self.scratch
+                }
+                PointerDest::Temp => {
+                    self.ensure_tmp(dest.index + bytes);
+                    &mut self.tmp
+                }
             };
             let mut n = 0;
             while n < bytes {
@@ -406,6 +444,10 @@ impl Core<'_> {
                         self.scratch
                             .copy_within(src.index..src.index + n, dest.index)
                     }
+                    PointerDest::Temp => {
+                        self.ensure_tmp(dest.index + n);
+                        self.tmp.copy_within(src.index..src.index + n, dest.index)
+                    }
                 }
             }
         } else {
@@ -418,6 +460,7 @@ impl Core<'_> {
                         PointerDest::Input => &self.input[src.index..src.index + n],
                         PointerDest::Output => panic!(),
                         PointerDest::Scratch => &self.scratch[src.index..src.index + n],
+                        PointerDest::Temp => &self.tmp[src.index..src.index + n],
                     })
                 }
                 PointerDest::Scratch => {
@@ -427,6 +470,17 @@ impl Core<'_> {
                         PointerDest::Input => &self.input[src.index..src.index + n],
                         PointerDest::Output => &self.output[src.index..src.index + n],
                         PointerDest::Scratch => panic!(),
+                        PointerDest::Temp => &self.tmp[src.index..src.index + n],
+                    })
+                }
+                PointerDest::Temp => {
+                    self.ensure_tmp(dest.index + n);
+                    self.tmp[dest.index..dest.index + n].copy_from_slice(match src.into {
+                        PointerDest::Null => panic!(),
+                        PointerDest::Input => &self.input[src.index..src.index + n],
+                        PointerDest::Output => &self.output[src.index..src.index + n],
+                        PointerDest::Scratch => &self.scratch[src.index..src.index + n],
+                        PointerDest::Temp => panic!(),
                     })
                 }
             }
@@ -442,6 +496,10 @@ impl Core<'_> {
             PointerDest::Scratch => {
                 self.ensure_scratch(p.index + n);
                 &mut self.scratch[p.index..p.index + n]
+            }
+            PointerDest::Temp => {
+                self.ensure_tmp(p.index + n);
+                &mut self.tmp[p.index..p.index + n]
             }
         }
         .fill(v);

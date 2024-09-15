@@ -9,6 +9,7 @@ pub struct Core<'a> {
     pub input: &'a [u8],
     pub output: &'a mut [u8],
     pub scratch: Vec<u8>,
+    pub tmp: Vec<u8>,
 }
 
 impl Core<'_> {
@@ -852,7 +853,7 @@ impl Core<'_> {
                     scratch,
                 );
                 dst += decoded_size;
-                array_data.push(dst);
+                array_data.push(chunk_dst);
                 array_lens.push(decoded_size);
                 src += dec;
                 total_size += decoded_size;
@@ -936,6 +937,7 @@ impl Core<'_> {
                 false,
                 scratch_cur,
             );
+            assert_eq!(size_out, num_indexes);
             src += n;
 
             let n = self.Kraken_DecodeBytes(
@@ -947,6 +949,7 @@ impl Core<'_> {
                 false,
                 scratch_cur,
             );
+            assert_eq!(size_out, num_indexes);
             src += n;
 
             for i in 0..lenlog2_chunksize {
@@ -970,27 +973,27 @@ impl Core<'_> {
         );
 
         let mut f = src;
-        let mut bits_f = 0;
+        let mut bits_f = 0u32;
         let mut bitpos_f = 24;
 
         let src_end_actual = src + varbits_complen;
 
         let mut b = src_end_actual;
-        let mut bits_b = 0;
+        let mut bits_b = 0u32;
         let mut bitpos_b = 24;
 
-        const BITMASKS: [usize; 32] = [
+        const BITMASKS: [u32; 32] = [
             0x1, 0x3, 0x7, 0xf, 0x1f, 0x3f, 0x7f, 0xff, 0x1ff, 0x3ff, 0x7ff, 0xfff, 0x1fff, 0x3fff,
             0x7fff, 0xffff, 0x1ffff, 0x3ffff, 0x7ffff, 0xfffff, 0x1fffff, 0x3fffff, 0x7fffff,
             0xffffff, 0x1ffffff, 0x3ffffff, 0x7ffffff, 0xfffffff, 0x1fffffff, 0x3fffffff,
             0x7fffffff, 0xffffffff,
         ];
 
-        for i in (0..num_lens).step_by(2) {
-            bits_f |= self.get_bytes_as_usize_be(f, 4) >> (24 - bitpos_f);
+        for i in (0..num_lens & !1).step_by(2) {
+            bits_f |= self.get_bytes_as_usize_be(f, 4) as u32 >> (24 - bitpos_f);
             f += (bitpos_f + 7) >> 3;
 
-            bits_b |= self.get_bytes_as_usize_le(b - 1, 4) >> (24 - bitpos_b);
+            bits_b |= self.get_bytes_as_usize_le(b - 4, 4) as u32 >> (24 - bitpos_b);
             b -= (bitpos_b + 7) >> 3;
 
             let numbits_f = self.get_byte(interval_lenlog2 + i + 0) as i32;
@@ -1014,7 +1017,7 @@ impl Core<'_> {
 
         // read final one since above loop reads 2
         if (num_lens & 1) == 1 {
-            bits_f |= self.get_bytes_as_usize_be(f, 4) >> (24 - bitpos_f);
+            bits_f |= self.get_bytes_as_usize_be(f, 4) as u32 >> (24 - bitpos_f);
             let numbits_f = self.get_byte(interval_lenlog2 + num_lens - 1);
             bits_f = (bits_f | 1).rotate_left(numbits_f as _);
             let value_f = bits_f & BITMASKS[numbits_f as usize];
@@ -1029,14 +1032,15 @@ impl Core<'_> {
 
         for arri in 0..array_count {
             array_data.push(dst);
+
             assert!(indi < num_indexes, "{} {}", indi, num_indexes);
 
             loop {
                 let source = self.get_as_usize(interval_indexes + indi);
+                indi += 1;
                 if source == 0 {
                     break;
                 }
-                indi += 1;
                 assert!(
                     source <= num_arrays_in_file,
                     "{} {}",
@@ -1044,7 +1048,7 @@ impl Core<'_> {
                     num_arrays_in_file
                 );
                 assert!(leni < num_lens, "{} {}", leni, num_lens);
-                let cur_len = decoded_intervals[leni];
+                let cur_len = decoded_intervals[leni] as usize;
                 leni += 1;
                 let bytes_left = entropy_array_size[source - 1];
                 assert!(cur_len <= bytes_left, "{} {}", cur_len, bytes_left);
@@ -1052,9 +1056,8 @@ impl Core<'_> {
                 let blksrc = entropy_array_data[source - 1];
                 entropy_array_size[source - 1] -= cur_len;
                 entropy_array_data[source - 1] += cur_len;
-                let dstx = dst;
+                self.memcpy(dst, blksrc, cur_len);
                 dst += cur_len;
-                self.memcpy(dstx, blksrc, cur_len);
             }
             if increment_leni {
                 leni += 1;
@@ -1219,8 +1222,18 @@ impl Core<'_> {
             } else {
                 cmd_ptr_end -= 2;
                 let bytes_to_copy = (self.get_bytes_as_usize_le(cmd_ptr_end, 2) - 511) * 64;
-                assert!(bytes_to_copy <= cmd_ptr_end - cmd_ptr);
-                assert!(bytes_to_copy <= dst_end - dst);
+                assert!(
+                    bytes_to_copy <= cmd_ptr_end - cmd_ptr,
+                    "{} {}",
+                    bytes_to_copy,
+                    cmd_ptr_end - cmd_ptr
+                );
+                assert!(
+                    bytes_to_copy <= dst_end - dst,
+                    "{} {}",
+                    bytes_to_copy,
+                    dst_end - dst
+                );
                 self.memcpy(dst, cmd_ptr, bytes_to_copy);
                 dst += bytes_to_copy;
                 cmd_ptr += bytes_to_copy;
