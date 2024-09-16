@@ -184,10 +184,11 @@ impl<In: Read + Seek> Extractor<In> {
                     DecoderType::Bitknit => {
                         if self.header.restart_decoder {
                             self.bitknit_state = Some(bitknit::State::new());
+                            self.header.restart_decoder = false;
                         }
                         let mut bitknit = bitknit::Core::new(
                             input,
-                            output,
+                            &mut output[..offset + dst_bytes_left],
                             self.bitknit_state.as_mut().unwrap(),
                             offset,
                         );
@@ -384,7 +385,7 @@ mod tests {
             let filename = path.file_stem().unwrap().to_str().unwrap().to_string();
             let extension = path.extension().unwrap().to_str().unwrap().to_string();
             if filename != "dickens" || extension != "bitknit" {
-                continue;
+                //continue;
             }
             log::info!("Extracting {}.{}", filename, extension);
             let mut file = fs::File::open(path).unwrap();

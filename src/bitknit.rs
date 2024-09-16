@@ -8,6 +8,12 @@ struct Base<const F: usize, const A: usize, const L: usize> {
     lookup: [u16; L],
 }
 
+type Literal = Base<300, 301, 516>;
+
+type DistanceLsb = Base<40, 41, 68>;
+
+type DistanceBits = Base<21, 22, 68>;
+
 impl<const F: usize, const A: usize, const L: usize> Base<F, A, L> {
     const SHIFT: u16 = if A == 301 { 6 } else { 9 };
     const F_INC: u16 = 1026 - A as u16;
@@ -16,8 +22,8 @@ impl<const F: usize, const A: usize, const L: usize> Base<F, A, L> {
         let mut p = 0;
         for (v, i) in self.a[1..].iter().zip(0u16..) {
             let p_end = ((v - 1) >> Self::SHIFT) + 1;
-            for j in (p..=p_end).step_by(4) {
-                self.lookup[j as usize..][..4].fill(i);
+            for j in (p as usize..=p_end as usize).step_by(4) {
+                self.lookup[j..][..4].fill(i);
             }
             p = p_end;
         }
@@ -29,10 +35,10 @@ impl<const F: usize, const A: usize, const L: usize> Base<F, A, L> {
 
         let mut sum = 0;
         for (f, a) in self.freq.iter_mut().zip(self.a[1..].iter_mut()) {
-            sum += *f;
-            *f = 1;
-            *a += (sum - *a) >> 1;
+            sum += *f as u32;
+            *a = (*a as u32).wrapping_add(sum.wrapping_sub(*a as u32) >> 1) as u16;
         }
+        self.freq.fill(1);
 
         self.fill_lut();
     }
@@ -46,9 +52,9 @@ impl<const F: usize, const A: usize, const L: usize> Base<F, A, L> {
         while masked >= self.a[sym + 1] as usize {
             sym += 1;
         }
-        *bits = ((*bits as usize >> 15) * (self.a[sym + 1] - self.a[sym]) as usize
-            - self.a[sym] as usize
-            + masked) as u32;
+        let s = self.a[sym] as u32;
+        let s1 = self.a[sym + 1] as u32;
+        *bits = masked as u32 + (*bits >> 15) * (s1 - s) - s;
         self.freq[sym] += 31;
         self.adapt_interval -= 1;
         if self.adapt_interval == 0 {
@@ -65,7 +71,7 @@ impl<const F: usize, const A: usize, const L: usize> Default for Base<F, A, L> {
                 if i < 264 {
                     ((0x8000 - 300 + 264) * i / 264) as u16
                 } else {
-                    (0x8000 - 300) + i as u16
+                    ((0x8000 - 300) + i) as u16
                 }
             })
         } else {
@@ -83,12 +89,6 @@ impl<const F: usize, const A: usize, const L: usize> Default for Base<F, A, L> {
         s
     }
 }
-
-type Literal = Base<300, 301, 516>;
-
-type DistanceLsb = Base<40, 41, 68>;
-
-type DistanceBits = Base<21, 22, 68>;
 
 pub(crate) struct State {
     recent_dist: [u32; 8],
@@ -173,6 +173,11 @@ impl<'a> Core<'a> {
         self.dst += 2;
     }
 
+    fn write_sym(&mut self, sym: u8) {
+        self.output[self.dst] = sym.wrapping_add(self.last_match());
+        self.dst += 1;
+    }
+
     fn copy_chunks(&mut self, copy_length: usize, match_dist: usize, chunk_size: usize) {
         for i in (0..copy_length).step_by(chunk_size) {
             let dst = self.dst + i;
@@ -201,8 +206,8 @@ impl<'a> Core<'a> {
     fn renormalize(&mut self) {
         if self.bits < 0x10000 {
             self.bits = (self.bits << 16) | self.read_2();
-            std::mem::swap(&mut self.bits, &mut self.bits2);
         }
+        std::mem::swap(&mut self.bits, &mut self.bits2);
     }
 
     pub(crate) fn decode(&mut self) -> usize {
@@ -237,9 +242,9 @@ impl<'a> Core<'a> {
             self.renormalize();
 
             if sym < 256 {
-                self.write_1(sym as u8 + self.last_match());
+                self.write_sym(sym as u8);
 
-                if self.dst + 4 < self.output.len() {
+                if self.dst + 4 >= self.output.len() {
                     break;
                 }
 
@@ -247,7 +252,7 @@ impl<'a> Core<'a> {
                 self.renormalize();
 
                 if sym < 256 {
-                    self.write_1(sym as u8 + self.last_match());
+                    self.write_sym(sym as u8);
                     continue;
                 }
             }
