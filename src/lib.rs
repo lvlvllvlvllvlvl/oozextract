@@ -3,6 +3,7 @@
 pub mod bit_reader;
 //pub mod error;
 mod algorithm;
+mod bitknit;
 mod core;
 pub mod huffman;
 pub mod kraken;
@@ -20,8 +21,9 @@ use crate::leviathan::Leviathan;
 use crate::mermaid::Mermaid;
 pub use kraken::*;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub enum DecoderType {
+    #[default]
     Lzna = 0x5,
     Kraken = 0x6,
     Mermaid = 0xA,
@@ -30,7 +32,7 @@ pub enum DecoderType {
 }
 
 /// Header in front of each 256k block
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct BlockHeader {
     /// Type of decoder used
     pub decoder_type: DecoderType,
@@ -84,13 +86,14 @@ pub enum QuantumHeader {
 pub struct Extractor<In: Read + Seek> {
     input: In,
     tmp: [u8; LARGE_BLOCK],
+    header: BlockHeader,
+    bitknit_state: Option<bitknit::State>,
 }
 
 impl<In: Read + Seek> Read for Extractor<In> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         log::debug!("reading to buf with size {}", buf.len());
         let mut bytes_written = 0;
-        let header = &mut [0u8, 0u8];
         while bytes_written < buf.len() {
             log::debug!(
                 "read: {:?}, written: {}, buffer size: {}",
@@ -99,18 +102,18 @@ impl<In: Read + Seek> Read for Extractor<In> {
                 buf.len()
             );
             if (bytes_written & 0x3FFFF) == 0 {
-                match self.input.read_exact(header) {
+                let buf = &mut self.tmp[..2];
+                match self.input.read_exact(buf) {
                     Err(ref e) if e.kind() == ErrorKind::UnexpectedEof => {
                         log::debug!("No more data. Wrote {} bytes", bytes_written);
                         return Ok(bytes_written);
                     }
                     Err(e) => return Err(e),
-                    _ => (),
+                    _ => self.parse_header()?,
                 }
             }
-            let header = self.parse_header(header)?;
-            log::debug!("Parsed header {:?}", header);
-            match self.extract(buf, bytes_written, header) {
+            log::debug!("Parsed header {:?}", self.header);
+            match self.extract(buf, bytes_written) {
                 Ok(0) => {
                     return if bytes_written > 0 {
                         log::debug!("Input empty. Wrote {} bytes", bytes_written);
@@ -136,18 +139,15 @@ impl<In: Read + Seek> Extractor<In> {
         Extractor {
             input,
             tmp: [0; LARGE_BLOCK],
+            header: Default::default(),
+            bitknit_state: None,
         }
     }
 
-    fn extract(
-        &mut self,
-        output: &mut [u8],
-        offset: usize,
-        header: BlockHeader,
-    ) -> std::io::Result<usize> {
-        let dst_bytes_left = std::cmp::min(output.len() - offset, header.block_size());
+    fn extract(&mut self, output: &mut [u8], offset: usize) -> std::io::Result<usize> {
+        let dst_bytes_left = std::cmp::min(output.len() - offset, self.header.block_size());
 
-        if header.uncompressed {
+        if self.header.uncompressed {
             let mut bytes_copied = 0;
             while bytes_copied < dst_bytes_left {
                 let count = self
@@ -162,7 +162,7 @@ impl<In: Read + Seek> Extractor<In> {
             return Ok(bytes_copied);
         }
 
-        let quantum = self.parse_quantum_header(&header)?;
+        let quantum = self.parse_quantum_header()?;
         log::debug!("Parsed quantum {:?}", quantum);
         match quantum {
             QuantumHeader::Compressed {
@@ -170,10 +170,10 @@ impl<In: Read + Seek> Extractor<In> {
             } => {
                 let input = &mut self.tmp[..compressed_size];
                 self.input.read_exact(input)?;
-                if header.use_checksums {
+                if self.header.use_checksums {
                     // If you can find a file with checksums enabled maybe you can figure out which algorithm to use here
                 }
-                let bytes_read = match header.decoder_type {
+                let bytes_read = match self.header.decoder_type {
                     DecoderType::Lzna => compressed_size,
                     DecoderType::Kraken => {
                         Core::new(input, output).decode_quantum(offset, dst_bytes_left, Kraken)
@@ -181,7 +181,18 @@ impl<In: Read + Seek> Extractor<In> {
                     DecoderType::Mermaid => {
                         Core::new(input, output).decode_quantum(offset, dst_bytes_left, Mermaid)
                     }
-                    DecoderType::Bitknit => compressed_size,
+                    DecoderType::Bitknit => {
+                        if self.header.restart_decoder {
+                            self.bitknit_state = Some(bitknit::State::new());
+                        }
+                        let mut bitknit = bitknit::Core::new(
+                            input,
+                            output,
+                            self.bitknit_state.as_mut().unwrap(),
+                            offset,
+                        );
+                        bitknit.decode()
+                    }
                     DecoderType::Leviathan => {
                         Core::new(input, output).decode_quantum(offset, dst_bytes_left, Leviathan)
                     }
@@ -223,23 +234,27 @@ impl<In: Read + Seek> Extractor<In> {
         }
     }
 
-    fn parse_header(&mut self, p: &[u8; 2]) -> Result<BlockHeader, std::io::Error> {
-        let b1 = p[0];
-        let b2 = p[1];
+    fn parse_header(&mut self) -> Result<(), std::io::Error> {
+        let b1 = self.tmp[0];
+        let b2 = self.tmp[1];
         if ((b1 & 0xF) != 0xC) || (((b1 >> 4) & 3) != 0) {
-            self.io_error(ErrorKind::InvalidData, p)
+            self.io_error(
+                ErrorKind::InvalidData,
+                u16::from_le_bytes(*self.tmp.first_chunk().unwrap()),
+            )?
         } else {
-            Ok(BlockHeader {
+            self.header = BlockHeader {
                 restart_decoder: (b1 >> 7) & 1 == 1,
                 uncompressed: (b1 >> 6) & 1 == 1,
                 decoder_type: self.decoder_type(b2 & 0x7F)?,
                 use_checksums: (b2 >> 7) != 0,
-            })
+            };
+            Ok(())
         }
     }
 
-    fn parse_quantum_header(&mut self, header: &BlockHeader) -> std::io::Result<QuantumHeader> {
-        if header.block_size() == LARGE_BLOCK {
+    fn parse_quantum_header(&mut self) -> std::io::Result<QuantumHeader> {
+        if self.header.block_size() == LARGE_BLOCK {
             let v = usize::from_be_bytes(self.read_bytes(3)?);
             let size = v & 0x3FFFF;
             if size != 0x3ffff {
@@ -247,7 +262,7 @@ impl<In: Read + Seek> Extractor<In> {
                     compressed_size: size + 1,
                     flag1: ((v >> 18) & 1) == 1,
                     flag2: ((v >> 19) & 1) == 1,
-                    checksum: if header.use_checksums {
+                    checksum: if self.header.use_checksums {
                         u32::from_be_bytes(self.read_bytes(3)?)
                     } else {
                         0
@@ -268,7 +283,7 @@ impl<In: Read + Seek> Extractor<In> {
                     compressed_size: usize::from(size + 1),
                     flag1: (v >> 14) & 1 == 1,
                     flag2: (v >> 15) & 1 == 1,
-                    checksum: if header.use_checksums {
+                    checksum: if self.header.use_checksums {
                         u32::from_be_bytes(self.read_bytes(3)?)
                     } else {
                         0
@@ -368,8 +383,8 @@ mod tests {
             let path = path.unwrap().path();
             let filename = path.file_stem().unwrap().to_str().unwrap().to_string();
             let extension = path.extension().unwrap().to_str().unwrap().to_string();
-            if filename != "dickens" || extension != "mermaid" {
-                //continue;
+            if filename != "dickens" || extension != "bitknit" {
+                continue;
             }
             log::info!("Extracting {}.{}", filename, extension);
             let mut file = fs::File::open(path).unwrap();
@@ -385,7 +400,7 @@ mod tests {
             let mut extractor = Extractor::new(file);
             extractor.read_exact(buf).unwrap();
 
-            if extension != "bitknit" && extension != "lzna" {
+            if extension != "lzna" {
                 let verify_file = format!("verify/{}", filename);
                 log::debug!("compare to file {}", verify_file);
                 let expected = std::fs::read(verify_file).unwrap();
