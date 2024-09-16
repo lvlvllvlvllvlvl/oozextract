@@ -82,6 +82,7 @@ impl BitReader {
         if n <= 24 {
             rv = self.ReadBitsNoRefillZero(n);
         } else {
+            // no test coverage
             rv = self.ReadBitsNoRefill(24) << (n - 24);
             self.Refill(source);
             rv += self.ReadBitsNoRefill(n - 24);
@@ -95,42 +96,13 @@ impl BitReader {
         if n <= 24 {
             rv = self.ReadBitsNoRefillZero(n);
         } else {
+            // no test coverage
             rv = self.ReadBitsNoRefill(24) << (n - 24);
             self.RefillBackwards(source);
             rv += self.ReadBitsNoRefill(n - 24);
         }
         self.RefillBackwards(source);
         rv
-    }
-
-    // Reads a gamma value.
-    // Assumes bitreader is already filled with at least 23 bits
-    pub fn ReadGamma(&mut self) -> i32 {
-        let mut n;
-        if self.bits != 0 {
-            n = self.leading_zeros();
-        } else {
-            n = 32;
-        }
-        n = 2 * n + 2;
-        assert!(n < 24);
-        self.bitpos += n;
-        let r = (self.bits >> (32 - n)) as i32;
-        self.bits <<= n;
-        r - 2
-    }
-
-    // Reads a gamma value with |forced| number of forced bits.
-    pub fn ReadGammaX(&mut self, forced: i32) -> i32 {
-        if self.bits != 0 {
-            let lz = self.leading_zeros();
-            assert!(lz < 24);
-            let r = (self.bits >> (31 - lz - forced)) + ((lz as u32 - 1) << forced);
-            self.bits <<= lz + forced + 1;
-            self.bitpos += lz + forced + 1;
-            return r as _;
-        }
-        0
     }
 
     // Reads an offset code parametrized by |v|.

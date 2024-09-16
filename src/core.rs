@@ -329,6 +329,7 @@ impl Core<'_> {
         src = bits.p - ((24 - bits.bitpos) / 8);
 
         if num_syms == 1 {
+            // no test coverage
             self.memset(output, syms[0], output_size);
             return src - src_end;
         }
@@ -1129,6 +1130,7 @@ impl Core<'_> {
             src += 3;
         } else {
             // long mode, 18 bit sizes
+            // no test coverage
             if src_end - src < 5 {
                 return None;
             } // too few bytes

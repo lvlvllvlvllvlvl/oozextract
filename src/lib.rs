@@ -385,7 +385,7 @@ mod tests {
             let mut extractor = Extractor::new(file);
             extractor.read_exact(buf).unwrap();
 
-            if extension == "kraken" || extension == "leviathan" || extension == "mermaid" {
+            if extension != "bitknit" && extension != "lzna" {
                 let verify_file = format!("verify/{}", filename);
                 log::debug!("compare to file {}", verify_file);
                 let expected = std::fs::read(verify_file).unwrap();

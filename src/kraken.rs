@@ -134,6 +134,7 @@ impl KrakenLzTable {
 
         if core.get_as_usize(src) & 0x80 != 0 {
             // uses the mode where distances are coded with 2 tables
+            // no test coverage for this branch.
             offs_scaling = i32::from(core.get_byte(src)) - 127;
             src += 1;
 
