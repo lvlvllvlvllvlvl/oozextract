@@ -211,31 +211,29 @@ impl HuffRevLut {
 
         assert_eq!(currslot, 2048);
         HuffRevLut {
-            bits2len: reverse_lut(bits2len),
-            bits2sym: reverse_lut(bits2sym),
+            bits2len: reverse_lut(&bits2len),
+            bits2sym: reverse_lut(&bits2sym),
         }
     }
 }
 
-pub fn reverse_lut(input: [u8; 2064]) -> [u8; 2048] {
+#[allow(unreachable_code)]
+pub fn reverse_lut(input: &[u8; 2064]) -> [u8; 2048] {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    return reverse_simd(&input);
-    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    return reverse_sse(input);
+    #[cfg(feature = "nightly")]
+    return reverse_lut(input);
     reverse_naive(input)
 }
 
 /// 2,546.73 ns/iter on my machine
 pub fn reverse_naive(input: &[u8; 2064]) -> [u8; 2048] {
-    let mut output = [0; 2048];
-    for i in 0..2048 {
-        output[usize::from((i as u16).reverse_bits() >> 5)] = input[i];
-    }
-    output
+    std::array::from_fn(|i| input[((i as u16).reverse_bits() >> 5) as usize])
 }
 
 /// 133.47 ns/iter on my machine
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-pub fn reverse_simd(input: &[u8; 2064]) -> [u8; 2048] {
+pub fn reverse_sse(input: &[u8; 2064]) -> [u8; 2048] {
     #[cfg(target_arch = "x86")]
     use std::arch::x86::*;
     #[cfg(target_arch = "x86_64")]
@@ -292,6 +290,51 @@ pub fn reverse_simd(input: &[u8; 2064]) -> [u8; 2048] {
     result
 }
 
+/// 142.68 ns/iter on my machine
+#[cfg(feature = "nightly")]
+pub fn reverse_simd(input: &[u8; 2064]) -> [u8; 2048] {
+    use std::simd::*;
+    let mut result = [0; 2048];
+    let mut output = &mut result[..];
+    const OFFSETS: [usize; 32] = [
+        0x00, 0x80, 0x40, 0xC0, 0x20, 0xA0, 0x60, 0xE0, 0x10, 0x90, 0x50, 0xD0, 0x30, 0xB0, 0x70,
+        0xF0, 0x08, 0x88, 0x48, 0xC8, 0x28, 0xA8, 0x68, 0xE8, 0x18, 0x98, 0x58, 0xD8, 0x38, 0xB8,
+        0x78, 0xF8,
+    ];
+    for offset in OFFSETS {
+        let i = &input[offset..];
+        let t: [u8x8; 8] = std::array::from_fn(|j| u8x8::from_slice(&i[j * 256..]));
+        let mut iter = t.array_chunks().map(|[l, r]| l.interleave(*r));
+        let t: [_; 4] = std::array::from_fn(|_| iter.next().unwrap());
+        let mut iter = t
+            .array_chunks()
+            .map(|[l, r]| (l.0.interleave(r.0), l.1.interleave(r.1)));
+        let t: [_; 2] = std::array::from_fn(|_| iter.next().unwrap());
+        let t = t
+            .array_chunks()
+            .map(|[l, r]| {
+                (
+                    l.0 .0.interleave(r.0 .0),
+                    l.1 .0.interleave(r.1 .0),
+                    l.0 .1.interleave(r.0 .1),
+                    l.1 .1.interleave(r.1 .1),
+                )
+            })
+            .next()
+            .unwrap();
+        output[..8].copy_from_slice(&t.0 .0.to_array());
+        output[1024..][..8].copy_from_slice(&t.0 .1.to_array());
+        output[256..][..8].copy_from_slice(&t.1 .0.to_array());
+        output[1280..][..8].copy_from_slice(&t.1 .1.to_array());
+        output[512..][..8].copy_from_slice(&t.2 .0.to_array());
+        output[1536..][..8].copy_from_slice(&t.2 .1.to_array());
+        output[768..][..8].copy_from_slice(&t.3 .0.to_array());
+        output[1792..][..8].copy_from_slice(&t.3 .1.to_array());
+        output = &mut output[8..];
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use std::ops::BitXor;
@@ -299,11 +342,15 @@ mod tests {
     use super::*;
 
     #[test_log::test]
-    fn it_works() {
+    fn simd_test() {
         let input: [u8; 2064] = std::array::from_fn(|i| (i as u8).bitxor((i >> 8) as u8));
         let naive = reverse_naive(&input);
+        #[cfg(feature = "nightly")]
         let simd = reverse_simd(&input);
+        let sse = reverse_sse(&input);
         for i in 1..2048 {
+            assert_eq!(naive[i], sse[i], "{}", i);
+            #[cfg(feature = "nightly")]
             assert_eq!(naive[i], simd[i], "{}", i);
         }
     }

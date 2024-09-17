@@ -1,3 +1,5 @@
+//uncomment for testing; users of the library should be able to enable these on their own crate
+//#![feature(portable_simd, array_chunks)]
 #![allow(non_snake_case, clippy::too_many_arguments)]
 
 pub mod bit_reader;
