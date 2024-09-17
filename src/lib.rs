@@ -7,12 +7,13 @@ pub mod bit_reader;
 mod algorithm;
 mod bitknit;
 mod core;
-pub mod huffman;
-pub mod kraken;
+mod huffman;
+mod kraken;
 mod leviathan;
+mod lzna;
 mod mermaid;
 mod pointer;
-pub mod tans;
+mod tans;
 
 use std::fmt::Debug;
 use std::io::{ErrorKind, Read, Seek};
@@ -20,6 +21,7 @@ use std::panic::Location;
 
 use crate::core::Core;
 use crate::leviathan::Leviathan;
+use crate::lzna::{Lzna, LznaState};
 use crate::mermaid::Mermaid;
 pub use kraken::*;
 
@@ -90,6 +92,7 @@ pub struct Extractor<In: Read + Seek> {
     tmp: [u8; LARGE_BLOCK],
     header: BlockHeader,
     bitknit_state: Option<bitknit::State>,
+    lzna_state: Option<LznaState>,
 }
 
 impl<In: Read + Seek> Read for Extractor<In> {
@@ -143,6 +146,7 @@ impl<In: Read + Seek> Extractor<In> {
             tmp: [0; LARGE_BLOCK],
             header: Default::default(),
             bitknit_state: None,
+            lzna_state: None,
         }
     }
 
@@ -176,12 +180,14 @@ impl<In: Read + Seek> Extractor<In> {
                     // If you can find a file with checksums enabled maybe you can figure out which algorithm to use here
                 }
                 let bytes_read = match self.header.decoder_type {
-                    DecoderType::Lzna => compressed_size,
                     DecoderType::Kraken => {
                         Core::new(input, output).decode_quantum(offset, dst_bytes_left, Kraken)
                     }
                     DecoderType::Mermaid => {
                         Core::new(input, output).decode_quantum(offset, dst_bytes_left, Mermaid)
+                    }
+                    DecoderType::Leviathan => {
+                        Core::new(input, output).decode_quantum(offset, dst_bytes_left, Leviathan)
                     }
                     DecoderType::Bitknit => {
                         if self.header.restart_decoder {
@@ -196,8 +202,13 @@ impl<In: Read + Seek> Extractor<In> {
                         );
                         bitknit.decode()
                     }
-                    DecoderType::Leviathan => {
-                        Core::new(input, output).decode_quantum(offset, dst_bytes_left, Leviathan)
+                    DecoderType::Lzna => {
+                        if self.header.restart_decoder {
+                            self.lzna_state = Some(LznaState::new());
+                            self.header.restart_decoder = false;
+                        }
+                        Lzna::new(input, &mut output[..offset + dst_bytes_left], offset)
+                            .decode_quantum(self.lzna_state.as_mut().unwrap())
                     }
                 };
                 assert_eq!(bytes_read, compressed_size);
@@ -386,8 +397,8 @@ mod tests {
             let path = path.unwrap().path();
             let filename = path.file_stem().unwrap().to_str().unwrap().to_string();
             let extension = path.extension().unwrap().to_str().unwrap().to_string();
-            if filename != "dickens" || extension != "bitknit" {
-                //continue;
+            if filename != "dickens" || extension != "lzna" {
+                continue;
             }
             log::info!("Extracting {}.{}", filename, extension);
             let mut file = fs::File::open(path).unwrap();
@@ -403,14 +414,12 @@ mod tests {
             let mut extractor = Extractor::new(file);
             extractor.read_exact(buf).unwrap();
 
-            if extension != "lzna" {
-                let verify_file = format!("verify/{}", filename);
-                log::debug!("compare to file {}", verify_file);
-                let expected = std::fs::read(verify_file).unwrap();
-                assert_eq!(buf.len(), expected.len());
-                for (i, (actual, expect)) in buf.iter().zip(expected.iter()).enumerate() {
-                    assert_eq!(actual, expect, "difference at byte {}", i);
-                }
+            let verify_file = format!("verify/{}", filename);
+            log::debug!("compare to file {}", verify_file);
+            let expected = std::fs::read(verify_file).unwrap();
+            assert_eq!(buf.len(), expected.len());
+            for (i, (actual, expect)) in buf.iter().zip(expected.iter()).enumerate() {
+                assert_eq!(actual, expect, "difference at byte {}", i);
             }
         }
         log::debug!("done");
