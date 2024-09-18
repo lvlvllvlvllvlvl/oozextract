@@ -1,0 +1,35 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      level:
+        type: choice
+        description: Which number to bump
+        default: patch
+        options:
+        - major
+        - minor
+        - patch
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - id: cache
+        uses: actions/cache@v4
+        with:
+            path: ~/.cargo/bin/cargo-release
+            key: ${{ runner.os }}-cargo-release
+      - run: cargo install cargo-release
+        if: steps.cache.outputs.cache-hit != 'true'
+      - run: |
+          git config user.name "GitHub Release Action"
+          git config user.email "119665497+lvlvllvlvllvlvl@users.noreply.github.com"
+          cargo login ${{ secrets.CRATES_IO_API_TOKEN }}
+          cargo release ${{ github.event.inputs.level }} --execute --no-confirm
