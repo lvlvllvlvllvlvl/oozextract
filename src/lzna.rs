@@ -1,5 +1,4 @@
 use std::array;
-use std::intrinsics::transmute;
 
 type LznaBitModel = u16;
 
@@ -223,7 +222,7 @@ impl<'a> Lzna<'a> {
     fn copy_offset(&mut self, dist: usize, length: usize) {
         let src = self.dst - dist;
         if dist == 1 {
-            let v = self.output[self.src];
+            let v = self.output[src];
             self.output[self.dst..][..length].fill(v);
         } else if dist > length {
             self.output.copy_within(src..src + length, self.dst);
@@ -275,10 +274,9 @@ impl<'a> Lzna<'a> {
             use std::arch::x86::*;
             #[cfg(target_arch = "x86_64")]
             use std::arch::x86_64::*;
-            use std::mem::transmute;
 
-            let t0 = _mm_loadu_si128(transmute(&model.prob[0]));
-            let t1 = _mm_loadu_si128(transmute(&model.prob[8]));
+            let t0 = _mm_loadu_si128(std::ptr::addr_of!(model.prob[0]).cast());
+            let t1 = _mm_loadu_si128(std::ptr::addr_of!(model.prob[8]).cast());
 
             let t = _mm_cvtsi32_si128(x as i32 & 0x7FFF);
             let t = _mm_shuffle_epi32::<0>(_mm_unpacklo_epi16(t, t));
@@ -286,7 +284,9 @@ impl<'a> Lzna<'a> {
             let c0 = _mm_cmpgt_epi16(t0, t);
             let c1 = _mm_cmpgt_epi16(t1, t);
 
-            bitindex = (_mm_movemask_epi8(_mm_packs_epi16(c0, c1)) | 0x10000).ilog2() as usize;
+            let m = _mm_movemask_epi8(_mm_packs_epi16(c0, c1));
+
+            bitindex = (m | 0x10000).trailing_zeros() as usize;
             start = model.prob[bitindex - 1] as u64;
             end = model.prob[bitindex] as u64;
 
@@ -299,8 +299,9 @@ impl<'a> Lzna<'a> {
             let t0 = _mm_add_epi16(_mm_srai_epi16::<7>(_mm_sub_epi16(c0, t0)), t0);
             let t1 = _mm_add_epi16(_mm_srai_epi16::<7>(_mm_sub_epi16(c1, t1)), t1);
 
-            _mm_storeu_si128(transmute(&model.prob[0]), t0);
-            _mm_storeu_si128(transmute(&model.prob[8]), t1);
+            _mm_storeu_si128(std::ptr::addr_of_mut!(model.prob[0]).cast(), t0);
+            _mm_storeu_si128(std::ptr::addr_of_mut!(model.prob[8]).cast(), t1);
+            //log::debug!("prob: {:?}", model.prob);
         }
 
         self.bits_a = (end - start) * (x >> 15) + (x & 0x7FFF) - start;
@@ -321,19 +322,19 @@ impl<'a> Lzna<'a> {
             use std::arch::x86::*;
             #[cfg(target_arch = "x86_64")]
             use std::arch::x86_64::*;
-            let t0 = _mm_loadu_si128(transmute(&model.prob[0]));
+            let t0 = _mm_loadu_si128(std::ptr::addr_of!(model.prob[0]).cast());
             let t = _mm_cvtsi32_si128(x as i32 & 0x7FFF);
             let t = _mm_shuffle_epi32::<0>(_mm_unpacklo_epi16(t, t));
             let c0 = _mm_cmpgt_epi16(t0, t);
 
-            bitindex = (_mm_movemask_epi8(c0) | 0x10000).ilog2() as usize >> 1;
+            bitindex = (_mm_movemask_epi8(c0) | 0x10000).trailing_zeros() as usize >> 1;
             start = model.prob[bitindex - 1] as u64;
             end = model.prob[bitindex] as u64;
 
             let c0 = _mm_and_si128(_mm_set1_epi16(0x7FE5), c0);
             let c0 = _mm_add_epi16(c0, _mm_set_epi16(56, 48, 40, 32, 24, 16, 8, 0));
             let t0 = _mm_add_epi16(_mm_srai_epi16::<7>(_mm_sub_epi16(c0, t0)), t0);
-            _mm_storeu_si128(transmute(&model.prob[0]), t0);
+            _mm_storeu_si128(std::ptr::addr_of!(model.prob[0]).cast_mut().cast(), t0);
         }
 
         self.bits_a = (end - start) * (x >> 15) + (x & 0x7FFF) - start;
@@ -402,7 +403,12 @@ impl<'a> Lzna<'a> {
         let lutd = &mut lut.low_bits_of_distance[if hi == 0 { 1 } else { 0 }];
         let low_bit = self.LznaRead1Bit(&mut lutd.v, 14, 6);
         let low_nibble = self.LznaReadNibble(&mut lutd.d[low_bit]);
-        low_bit + (2 * low_nibble) + (32 * hi) + 1
+        let v = low_bit + (2 * low_nibble) + (32 * hi) + 1;
+        //log::debug!("{}", v);
+        if v == 1 {
+            log::debug!("Err");
+        }
+        v
     }
 
     /// Read a length using the length model.
@@ -449,6 +455,7 @@ impl<'a> Lzna<'a> {
             self.write(x as u8);
         }
         while self.dst < dst_end {
+            let prev_dst = self.dst;
             let match_val = self.output[self.dst - dist];
 
             if self.LznaRead1Bit(&mut lut.is_literal[(self.dst & 7) + 8 * state], 13, 5) != 0 {
@@ -545,6 +552,9 @@ impl<'a> Lzna<'a> {
                     });
                 self.write(x as u8);
                 state = [0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 4, 5][state];
+            }
+            for i in prev_dst..self.dst {
+                log::debug!("out {}: {}", i, self.output[i] as char);
             }
         }
 

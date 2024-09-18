@@ -397,9 +397,6 @@ mod tests {
             let path = path.unwrap().path();
             let filename = path.file_stem().unwrap().to_str().unwrap().to_string();
             let extension = path.extension().unwrap().to_str().unwrap().to_string();
-            if filename != "dickens" || extension != "lzna" {
-                continue;
-            }
             log::info!("Extracting {}.{}", filename, extension);
             let mut file = fs::File::open(path).unwrap();
             let mut buf = [0; 8];

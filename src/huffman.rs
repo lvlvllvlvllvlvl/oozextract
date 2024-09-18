@@ -238,7 +238,6 @@ pub fn reverse_sse(input: &[u8; 2064]) -> [u8; 2048] {
     use std::arch::x86::*;
     #[cfg(target_arch = "x86_64")]
     use std::arch::x86_64::*;
-    use std::mem::transmute;
     let mut result = [0; 2048];
     let mut output = &mut result[..];
     const OFFSETS: [usize; 32] = [
@@ -247,23 +246,22 @@ pub fn reverse_sse(input: &[u8; 2064]) -> [u8; 2048] {
         0x78, 0xF8,
     ];
     for j in OFFSETS {
-        #[allow(clippy::useless_transmute)]
         unsafe {
             let t0 = _mm_unpacklo_epi8(
-                _mm_loadl_epi64(transmute(&input[j])),
-                _mm_loadl_epi64(transmute(&input[j + 256])),
+                _mm_loadl_epi64(std::ptr::addr_of!(input[j]).cast()),
+                _mm_loadl_epi64(std::ptr::addr_of!(input[j + 256]).cast()),
             );
             let t1 = _mm_unpacklo_epi8(
-                _mm_loadl_epi64(transmute(&input[j + 512])),
-                _mm_loadl_epi64(transmute(&input[j + 768])),
+                _mm_loadl_epi64(std::ptr::addr_of!(input[j + 512]).cast()),
+                _mm_loadl_epi64(std::ptr::addr_of!(input[j + 768]).cast()),
             );
             let t2 = _mm_unpacklo_epi8(
-                _mm_loadl_epi64(transmute(&input[j + 1024])),
-                _mm_loadl_epi64(transmute(&input[j + 1280])),
+                _mm_loadl_epi64(std::ptr::addr_of!(input[j + 1024]).cast()),
+                _mm_loadl_epi64(std::ptr::addr_of!(input[j + 1280]).cast()),
             );
             let t3 = _mm_unpacklo_epi8(
-                _mm_loadl_epi64(transmute(&input[j + 1536])),
-                _mm_loadl_epi64(transmute(&input[j + 1792])),
+                _mm_loadl_epi64(std::ptr::addr_of!(input[j + 1536]).cast()),
+                _mm_loadl_epi64(std::ptr::addr_of!(input[j + 1792]).cast()),
             );
 
             let s0 = _mm_unpacklo_epi8(t0, t1);
@@ -276,14 +274,26 @@ pub fn reverse_sse(input: &[u8; 2064]) -> [u8; 2048] {
             let t2 = _mm_unpackhi_epi8(s0, s1);
             let t3 = _mm_unpackhi_epi8(s2, s3);
 
-            _mm_storel_epi64(transmute(&output[0]), t0);
-            _mm_storeh_pd(transmute(&output[1024]), _mm_castsi128_pd(t0));
-            _mm_storel_epi64(transmute(&output[256]), t1);
-            _mm_storeh_pd(transmute(&output[1280]), _mm_castsi128_pd(t1));
-            _mm_storel_epi64(transmute(&output[512]), t2);
-            _mm_storeh_pd(transmute(&output[1536]), _mm_castsi128_pd(t2));
-            _mm_storel_epi64(transmute(&output[768]), t3);
-            _mm_storeh_pd(transmute(&output[1792]), _mm_castsi128_pd(t3));
+            _mm_storel_epi64(std::ptr::addr_of_mut!(output[0]).cast(), t0);
+            _mm_storeh_pd(
+                std::ptr::addr_of_mut!(output[1024]).cast(),
+                _mm_castsi128_pd(t0),
+            );
+            _mm_storel_epi64(std::ptr::addr_of_mut!(output[256]).cast(), t1);
+            _mm_storeh_pd(
+                std::ptr::addr_of_mut!(output[1280]).cast(),
+                _mm_castsi128_pd(t1),
+            );
+            _mm_storel_epi64(std::ptr::addr_of_mut!(output[512]).cast(), t2);
+            _mm_storeh_pd(
+                std::ptr::addr_of_mut!(output[1536]).cast(),
+                _mm_castsi128_pd(t2),
+            );
+            _mm_storel_epi64(std::ptr::addr_of_mut!(output[768]).cast(), t3);
+            _mm_storeh_pd(
+                std::ptr::addr_of_mut!(output[1792]).cast(),
+                _mm_castsi128_pd(t3),
+            );
         }
         output = &mut output[8..];
     }
