@@ -1,6 +1,5 @@
-//uncomment for testing; users of the library should be able to enable these on their own crate
-//#![feature(portable_simd, array_chunks)]
-#![allow(non_snake_case, clippy::too_many_arguments)]
+#![feature(portable_simd, array_chunks)]
+#![allow(clippy::too_many_arguments)]
 
 pub mod bit_reader;
 //pub mod error;
@@ -20,10 +19,10 @@ use std::io::{ErrorKind, Read, Seek};
 use std::panic::Location;
 
 use crate::core::Core;
+use crate::kraken::Kraken;
 use crate::leviathan::Leviathan;
 use crate::lzna::{Lzna, LznaState};
 use crate::mermaid::Mermaid;
-pub use kraken::*;
 
 #[derive(Debug, Default)]
 pub enum DecoderType {
@@ -413,7 +412,7 @@ mod tests {
 
             let verify_file = format!("verify/{}", filename);
             log::debug!("compare to file {}", verify_file);
-            let expected = std::fs::read(verify_file).unwrap();
+            let expected = fs::read(verify_file).unwrap();
             assert_eq!(buf.len(), expected.len());
             for (i, (actual, expect)) in buf.iter().zip(expected.iter()).enumerate() {
                 assert_eq!(actual, expect, "difference at byte {}", i);

@@ -63,11 +63,8 @@ impl Pointer {
             ..*self
         }
     }
-    pub fn debug(&self, n: usize) {
-        let bad_byte = 7136;
-        if self.into == PointerDest::Null && self.index <= bad_byte && self.index + n > bad_byte {
-            log::debug!("breakpoint here")
-        }
+    pub fn debug(&self, _: usize) {
+        // do nothing (there are no bugs)
     }
 }
 
@@ -102,17 +99,6 @@ impl std::ops::Add<i32> for Pointer {
                 .index
                 .checked_add_signed(rhs.try_into().unwrap())
                 .unwrap(),
-            ..self
-        }
-    }
-}
-
-impl std::ops::Add<isize> for Pointer {
-    type Output = Self;
-
-    fn add(self, rhs: isize) -> Self::Output {
-        Pointer {
-            index: self.index.checked_add_signed(rhs).unwrap(),
             ..self
         }
     }
@@ -188,15 +174,6 @@ impl std::ops::Sub<i32> for Pointer {
 pub struct IntPointer {
     pub into: PointerDest,
     pub index: usize,
-}
-
-impl IntPointer {
-    pub fn add_byte_offset(self, rhs: usize) -> Self {
-        IntPointer {
-            index: self.index + rhs,
-            ..self
-        }
-    }
 }
 
 impl std::ops::Add<usize> for IntPointer {
@@ -305,12 +282,12 @@ impl Core<'_> {
         }
     }
     pub fn get_bytes_as_usize_le(&mut self, p: Pointer, n: usize) -> usize {
-        let mut bytes = [0; std::mem::size_of::<usize>()];
+        let mut bytes = [0; size_of::<usize>()];
         bytes[..n].copy_from_slice(self.get_slice(p, n));
         usize::from_le_bytes(bytes)
     }
     pub fn get_bytes_as_usize_be(&mut self, p: Pointer, n: usize) -> usize {
-        const B: usize = std::mem::size_of::<usize>();
+        const B: usize = size_of::<usize>();
         let mut bytes = [0; B];
         bytes[B - n..].copy_from_slice(self.get_slice(p, n));
         usize::from_be_bytes(bytes)

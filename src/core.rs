@@ -38,7 +38,7 @@ impl Core<'_> {
             if (chunkhdr & 0x800000) == 0 {
                 log::debug!("Stored as entropy without any match copying.");
                 let mut out = dst;
-                src_used = self.Kraken_DecodeBytes(
+                src_used = self.decode_bytes(
                     &mut out,
                     src,
                     src_end,
@@ -70,8 +70,8 @@ impl Core<'_> {
         src - src_in
     }
 
-    // Unpacks the packed 8 bit offset and lengths into 32 bit.
-    pub fn Kraken_UnpackOffsets(
+    /// Unpacks the packed 8 bit offset and lengths into 32 bit.
+    pub fn unpack_offsets(
         &mut self,
         src: Pointer,
         src_end: Pointer,
@@ -95,7 +95,7 @@ impl Core<'_> {
             p: src,
             p_end: src_end,
         };
-        bits_a.Refill(self);
+        bits_a.refill(self);
 
         let mut bits_b = BitReader {
             bitpos: 24,
@@ -103,33 +103,33 @@ impl Core<'_> {
             p: src_end,
             p_end: src,
         };
-        bits_b.RefillBackwards(self);
+        bits_b.refill_backwards(self);
 
         if !excess_flag {
             assert!(bits_b.bits >= 0x2000, "{:X}", bits_b.bits);
             n = bits_b.leading_zeros();
             bits_b.bitpos += n;
             bits_b.bits <<= n;
-            bits_b.RefillBackwards(self);
+            bits_b.refill_backwards(self);
             n += 1;
             u32_len_stream_size = ((bits_b.bits >> (32 - n)) - 1) as usize;
             bits_b.bitpos += n;
             bits_b.bits <<= n;
-            bits_b.RefillBackwards(self);
+            bits_b.refill_backwards(self);
         }
 
         if multi_dist_scale == 0 {
             // Traditional way of coding offsets
             let packed_offs_stream_end = packed_offs_stream + packed_offs_stream_size;
             while packed_offs_stream != packed_offs_stream_end {
-                let d_a = bits_a.ReadDistance(self, self.get_byte(packed_offs_stream).into());
+                let d_a = bits_a.read_distance(self, self.get_byte(packed_offs_stream).into());
                 self.set_int(offs_stream, -d_a);
                 offs_stream += 1;
                 packed_offs_stream += 1;
                 if packed_offs_stream == packed_offs_stream_end {
                     break;
                 }
-                let d_b = bits_b.ReadDistanceB(self, self.get_byte(packed_offs_stream).into());
+                let d_b = bits_b.read_distance_b(self, self.get_byte(packed_offs_stream).into());
                 self.set_int(offs_stream, -d_b);
                 offs_stream += 1;
                 packed_offs_stream += 1;
@@ -143,7 +143,8 @@ impl Core<'_> {
                 cmd = self.get_byte(packed_offs_stream) as i32;
                 packed_offs_stream += 1;
                 assert!((cmd >> 3) <= 26, "{}", cmd >> 3);
-                offs = ((8 + (cmd & 7)) << (cmd >> 3)) | bits_a.ReadMoreThan24Bits(self, cmd >> 3);
+                offs =
+                    ((8 + (cmd & 7)) << (cmd >> 3)) | bits_a.read_more_than24bits(self, cmd >> 3);
                 self.set_int(offs_stream, 8 - offs);
                 offs_stream += 1;
                 if packed_offs_stream == packed_offs_stream_end {
@@ -152,12 +153,13 @@ impl Core<'_> {
                 cmd = i32::from(self.get_byte(packed_offs_stream));
                 packed_offs_stream += 1;
                 assert!((cmd >> 3) <= 26, "{}", cmd >> 3);
-                offs = ((8 + (cmd & 7)) << (cmd >> 3)) | bits_b.ReadMoreThan24BitsB(self, cmd >> 3);
+                offs = ((8 + (cmd & 7)) << (cmd >> 3))
+                    | bits_b.read_more_than_24_bits_b(self, cmd >> 3);
                 self.set_int(offs_stream, 8 - offs);
                 offs_stream += 1;
             }
             if multi_dist_scale != 1 {
-                self.CombineScaledOffsetArrays(
+                self.combine_scaled_offset_arrays(
                     &offs_stream_org,
                     offs_stream - offs_stream_org,
                     multi_dist_scale,
@@ -174,9 +176,9 @@ impl Core<'_> {
             .enumerate()
         {
             if i % 2 == 0 {
-                *dst = bits_a.ReadLength(self) as u32
+                *dst = bits_a.read_length(self) as u32
             } else {
-                *dst = bits_b.ReadLengthB(self) as u32
+                *dst = bits_b.read_length_b(self) as u32
             }
         }
 
@@ -196,7 +198,7 @@ impl Core<'_> {
         assert_eq!(u32_len_stream, u32_len_stream_size);
     }
 
-    fn CombineScaledOffsetArrays(
+    fn combine_scaled_offset_arrays(
         &mut self,
         offs_stream: &IntPointer,
         offs_stream_size: usize,
@@ -210,7 +212,7 @@ impl Core<'_> {
         }
     }
 
-    pub fn Kraken_DecodeBytes(
+    pub fn decode_bytes(
         &mut self,
         output: &mut Pointer,
         mut src: Pointer,
@@ -282,10 +284,10 @@ impl Core<'_> {
         }
 
         let src_used = match chunk_type {
-            2 | 4 => self.Kraken_DecodeBytes_Type12(src, src_size, dst, dst_size, chunk_type >> 1),
-            5 => self.Krak_DecodeRecursive(src, src_size, dst, dst_size, scratch),
-            3 => self.Krak_DecodeRLE(src, src_size, dst, dst_size, scratch),
-            1 => self.Krak_DecodeTans(src, src_size, dst, dst_size),
+            2 | 4 => self.decode_bytes_type12(src, src_size, dst, dst_size, chunk_type >> 1),
+            5 => self.decode_recursive(src, src_size, dst, dst_size, scratch),
+            3 => self.decode_rle(src, src_size, dst, dst_size, scratch),
+            1 => self.decode_tans(src, src_size, dst, dst_size),
             _ => panic!("{}", chunk_type),
         };
         assert_eq!(src_used, src_size, "chunk type: {}", chunk_type);
@@ -293,7 +295,7 @@ impl Core<'_> {
         src + src_size - src_org
     }
 
-    fn Kraken_DecodeBytes_Type12(
+    fn decode_bytes_type12(
         &mut self,
         mut src: Pointer,
         src_size: usize,
@@ -314,15 +316,15 @@ impl Core<'_> {
             p: src,
             p_end: src_end,
         };
-        bits.Refill(self);
+        bits.refill(self);
 
         let mut code_prefix = BASE_PREFIX;
         let mut syms = [0; 1280];
         let num_syms;
-        if !bits.ReadBitNoRefill() {
-            num_syms = self.Huff_ReadCodeLengthsOld(&mut bits, &mut syms, &mut code_prefix);
-        } else if !bits.ReadBitNoRefill() {
-            num_syms = self.Huff_ReadCodeLengthsNew(&mut bits, &mut syms, &mut code_prefix);
+        if !bits.read_bit_no_refill() {
+            num_syms = self.huff_read_code_lengths_old(&mut bits, &mut syms, &mut code_prefix);
+        } else if !bits.read_bit_no_refill() {
+            num_syms = self.huff_read_code_lengths_new(&mut bits, &mut syms, &mut code_prefix);
         } else {
             panic!();
         }
@@ -400,37 +402,37 @@ impl Core<'_> {
         src_size
     }
 
-    fn Huff_ReadCodeLengthsOld(
+    fn huff_read_code_lengths_old(
         &mut self,
         bits: &mut BitReader,
         syms: &mut [u8; 1280],
         code_prefix: &mut [usize; 12],
     ) -> i32 {
-        if bits.ReadBitNoRefill() {
+        if bits.read_bit_no_refill() {
             let mut sym = 0;
             let mut num_symbols = 0;
             let mut avg_bits_x4 = 32;
-            let forced_bits = bits.ReadBitsNoRefill(2);
+            let forced_bits = bits.read_bits_no_refill(2);
 
             let thres_for_valid_gamma_bits = 1 << (31 - (20 >> forced_bits));
-            let mut skip_initial_zeros = bits.ReadBit(self);
+            let mut skip_initial_zeros = bits.read_bit(self);
             while sym != 256 {
                 if skip_initial_zeros {
                     skip_initial_zeros = false;
                 } else {
                     // Run of zeros
                     assert_ne!(bits.bits & 0xff000000, 0);
-                    sym += bits.ReadBitsNoRefill(2 * (bits.leading_zeros() + 1)) - 2 + 1;
+                    sym += bits.read_bits_no_refill(2 * (bits.leading_zeros() + 1)) - 2 + 1;
                     if sym >= 256 {
                         break;
                     }
                 }
-                bits.Refill(self);
+                bits.refill(self);
                 // Read out the gamma value for the # of symbols
                 assert_ne!(bits.bits & 0xff000000, 0);
-                let mut n = bits.ReadBitsNoRefill(2 * (bits.leading_zeros() + 1)) - 2 + 1;
+                let mut n = bits.read_bits_no_refill(2 * (bits.leading_zeros() + 1)) - 2 + 1;
                 assert!(sym + n <= 256, "Overflow? {} {}", sym, n);
-                bits.Refill(self);
+                bits.refill(self);
                 num_symbols += n;
                 loop {
                     assert!(
@@ -441,12 +443,13 @@ impl Core<'_> {
                     );
 
                     let lz = bits.leading_zeros();
-                    let v = bits.ReadBitsNoRefill(lz + forced_bits + 1) + ((lz - 1) << forced_bits);
+                    let v =
+                        bits.read_bits_no_refill(lz + forced_bits + 1) + ((lz - 1) << forced_bits);
                     let codelen = (-(v & 1) ^ (v >> 1)) + ((avg_bits_x4 + 2) >> 2);
                     assert!(codelen >= 1, "{}", codelen);
                     assert!(codelen <= 11, "{}", codelen);
                     avg_bits_x4 = codelen + ((3 * avg_bits_x4 + 2) >> 2);
-                    bits.Refill(self);
+                    bits.refill(self);
                     syms[code_prefix[usize::try_from(codelen).unwrap()]] = sym as _;
                     code_prefix[usize::try_from(codelen).unwrap()] += 1;
                     sym += 1;
@@ -461,17 +464,17 @@ impl Core<'_> {
             num_symbols
         } else {
             // Sparse symbol encoding
-            let num_symbols = bits.ReadBitsNoRefill(8);
+            let num_symbols = bits.read_bits_no_refill(8);
             assert_ne!(num_symbols, 0);
             if num_symbols == 1 {
-                syms[0] = bits.ReadBitsNoRefill(8) as _;
+                syms[0] = bits.read_bits_no_refill(8) as _;
             } else {
-                let codelen_bits = bits.ReadBitsNoRefill(3);
+                let codelen_bits = bits.read_bits_no_refill(3);
                 assert!(codelen_bits <= 4, "{}", codelen_bits);
                 for _ in 0..num_symbols {
-                    bits.Refill(self);
-                    let sym = bits.ReadBitsNoRefill(8) as u8;
-                    let codelen = bits.ReadBitsNoRefillZero(codelen_bits) + 1;
+                    bits.refill(self);
+                    let sym = bits.read_bits_no_refill(8) as u8;
+                    let codelen = bits.read_bits_no_refill_zero(codelen_bits) + 1;
                     assert!(codelen <= 11, "{}", codelen);
                     syms[code_prefix[usize::try_from(codelen).unwrap()]] = sym;
                     code_prefix[usize::try_from(codelen).unwrap()] += 1;
@@ -481,17 +484,17 @@ impl Core<'_> {
         }
     }
 
-    fn Huff_ReadCodeLengthsNew(
+    fn huff_read_code_lengths_new(
         &mut self,
         bits: &mut BitReader,
         syms: &mut [u8; 1280],
         code_prefix: &mut [usize; 12],
     ) -> i32 {
-        let forced_bits = bits.ReadBitsNoRefill(2);
+        let forced_bits = bits.read_bits_no_refill(2);
 
-        let num_symbols = bits.ReadBitsNoRefill(8) + 1;
+        let num_symbols = bits.read_bits_no_refill(8) + 1;
 
-        let fluff = bits.ReadFluff(num_symbols);
+        let fluff = bits.read_fluff(num_symbols);
 
         let mut code_len = [0; 512];
         let mut br2 = BitReader2 {
@@ -500,8 +503,8 @@ impl Core<'_> {
             p: bits.p - ((24 - bits.bitpos + 7) >> 3) as u32,
         };
 
-        self.DecodeGolombRiceLengths(&mut code_len[..num_symbols as usize + fluff], &mut br2);
-        self.DecodeGolombRiceBits(
+        self.decode_golomb_rice_lengths(&mut code_len[..num_symbols as usize + fluff], &mut br2);
+        self.decode_golomb_rice_bits(
             &mut code_len[..usize::try_from(num_symbols).unwrap()],
             forced_bits as usize,
             &mut br2,
@@ -511,7 +514,7 @@ impl Core<'_> {
         bits.bitpos = 24;
         bits.p = br2.p;
         bits.bits = 0;
-        bits.Refill(self);
+        bits.refill(self);
         bits.bits <<= br2.bitpos;
         bits.bitpos += br2.bitpos as i32;
 
@@ -524,7 +527,7 @@ impl Core<'_> {
             running_sum += v;
         }
 
-        let ranges = self.Huff_ConvertToRanges(num_symbols, fluff, &code_len, bits);
+        let ranges = self.convert_to_ranges(num_symbols, fluff, &code_len, bits);
 
         let mut cp = 0;
         for range in ranges {
@@ -540,7 +543,7 @@ impl Core<'_> {
         num_symbols
     }
 
-    pub fn DecodeGolombRiceLengths(&self, mut dst: &mut [u8], br: &mut BitReader2) {
+    pub fn decode_golomb_rice_lengths(&self, mut dst: &mut [u8], br: &mut BitReader2) {
         const K_RICE_CODE_BITS2VALUE: [u32; 256] = [
             0x80000000, 0x00000007, 0x10000006, 0x00000006, 0x20000005, 0x00000105, 0x10000005,
             0x00000005, 0x30000004, 0x00000204, 0x10000104, 0x00000104, 0x20000004, 0x00010004,
@@ -638,7 +641,7 @@ impl Core<'_> {
         br.bitpos = bitpos;
     }
 
-    fn DecodeGolombRiceBits(
+    fn decode_golomb_rice_bits(
         &mut self,
         mut dst: &mut [u8],
         bitcount: usize,
@@ -706,7 +709,7 @@ impl Core<'_> {
         true
     }
 
-    pub fn Huff_ConvertToRanges(
+    pub fn convert_to_ranges(
         &self,
         num_symbols: i32,
         p: usize,
@@ -718,11 +721,11 @@ impl Core<'_> {
 
         // Start with space?
         if p & 1 != 0 {
-            bits.Refill(self);
+            bits.refill(self);
             let v = syms[symlen] as i32;
             symlen += 1;
             assert!(v < 8);
-            sym_idx = bits.ReadBitsNoRefill(v + 1) + (1 << (v + 1)) - 1;
+            sym_idx = bits.read_bits_no_refill(v + 1) + (1 << (v + 1)) - 1;
         }
 
         let mut syms_used = 0;
@@ -730,15 +733,15 @@ impl Core<'_> {
         let mut ranges: Vec<HuffRange> = Vec::with_capacity(num_ranges + 1);
 
         for _ in 0..num_ranges {
-            bits.Refill(self);
+            bits.refill(self);
             let v = syms[symlen] as i32;
             symlen += 1;
             assert!(v < 9);
-            let num = bits.ReadBitsNoRefillZero(v) + (1 << v);
+            let num = bits.read_bits_no_refill_zero(v) + (1 << v);
             let v = syms[symlen] as i32;
             symlen += 1;
             assert!(v < 8);
-            let space = bits.ReadBitsNoRefill(v + 1) + (1 << (v + 1)) - 1;
+            let space = bits.read_bits_no_refill(v + 1) + (1 << (v + 1)) - 1;
             ranges.push(HuffRange {
                 symbol: sym_idx as u16,
                 num: num as u16,
@@ -759,7 +762,7 @@ impl Core<'_> {
         ranges
     }
 
-    fn Krak_DecodeRecursive(
+    fn decode_recursive(
         &mut self,
         src_org: Pointer,
         src_size: usize,
@@ -782,7 +785,7 @@ impl Core<'_> {
             for _ in 0..n {
                 let mut decoded_size = 0;
                 let output_size = output_end - output;
-                let dec = self.Kraken_DecodeBytes(
+                let dec = self.decode_bytes(
                     &mut output,
                     src,
                     src_end,
@@ -798,7 +801,7 @@ impl Core<'_> {
             src - src_org
         } else {
             let mut decoded_size = 0;
-            let dec = self.Kraken_DecodeMultiArray(
+            let dec = self.decode_multi_array(
                 src,
                 src_end,
                 output,
@@ -816,7 +819,7 @@ impl Core<'_> {
         }
     }
 
-    pub fn Kraken_DecodeMultiArray(
+    pub fn decode_multi_array(
         &mut self,
         src_org: Pointer,
         src_end: Pointer,
@@ -844,7 +847,7 @@ impl Core<'_> {
         if num_arrays_in_file == 0 {
             for _ in 0..array_count {
                 let mut chunk_dst = dst;
-                let dec = self.Kraken_DecodeBytes(
+                let dec = self.decode_bytes(
                     &mut chunk_dst,
                     src,
                     src_end,
@@ -871,7 +874,7 @@ impl Core<'_> {
 
         for i in 0..num_arrays_in_file {
             let mut chunk_dst = scratch_cur;
-            let dec = self.Kraken_DecodeBytes(
+            let dec = self.decode_bytes(
                 &mut chunk_dst,
                 src,
                 src_end,
@@ -893,7 +896,7 @@ impl Core<'_> {
         let q = self.get_bytes_as_usize_le(src, 2);
         src += 2;
 
-        let num_indexes = self.Kraken_GetBlockSize(src, src_end, total_size).unwrap();
+        let num_indexes = self.get_block_size(src, src_end, total_size).unwrap();
 
         let mut num_lens = num_indexes - array_count;
         assert_ne!(num_lens, 0);
@@ -906,7 +909,7 @@ impl Core<'_> {
 
         if (q & 0x8000) != 0 {
             let mut size_out = 0;
-            let n = self.Kraken_DecodeBytes(
+            let n = self.decode_bytes(
                 &mut interval_indexes,
                 src,
                 src_end,
@@ -929,7 +932,7 @@ impl Core<'_> {
             let lenlog2_chunksize = num_indexes - array_count;
 
             let mut size_out = 0;
-            let n = self.Kraken_DecodeBytes(
+            let n = self.decode_bytes(
                 &mut interval_indexes,
                 src,
                 src_end,
@@ -941,7 +944,7 @@ impl Core<'_> {
             assert_eq!(size_out, num_indexes);
             src += n;
 
-            let n = self.Kraken_DecodeBytes(
+            let n = self.decode_bytes(
                 &mut interval_lenlog2,
                 src,
                 src_end,
@@ -1076,7 +1079,7 @@ impl Core<'_> {
         src_end_actual - src_org
     }
 
-    fn Kraken_GetBlockSize(
+    fn get_block_size(
         &mut self,
         src_org: Pointer,
         src_end: Pointer,
@@ -1148,7 +1151,7 @@ impl Core<'_> {
         Some(dst_size)
     }
 
-    fn Krak_DecodeRLE(
+    fn decode_rle(
         &mut self,
         src: Pointer,
         src_size: usize,
@@ -1168,7 +1171,7 @@ impl Core<'_> {
         if self.get_as_bool(src) {
             let mut dst_ptr = scratch;
             let mut dec_size = 0;
-            let n = self.Kraken_DecodeBytes(
+            let n = self.decode_bytes(
                 &mut dst_ptr,
                 src,
                 src + src_size,
@@ -1248,7 +1251,7 @@ impl Core<'_> {
         src_size
     }
 
-    fn Krak_DecodeTans(
+    fn decode_tans(
         &mut self,
         mut src: Pointer,
         src_size: usize,
@@ -1266,11 +1269,11 @@ impl Core<'_> {
             p: src,
             p_end: src_end,
         };
-        br.Refill(self);
+        br.refill(self);
 
-        assert!(!br.ReadBitNoRefill(), "reserved bit");
+        assert!(!br.read_bit_no_refill(), "reserved bit");
 
-        let l_bits = br.ReadBitsNoRefill(2) + 8;
+        let l_bits = br.read_bits_no_refill(2) + 8;
 
         let tans_data = TansDecoder::decode_table(self, &mut br, l_bits);
 

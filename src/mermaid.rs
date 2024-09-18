@@ -17,7 +17,7 @@ impl Algorithm for Mermaid {
         dst: Pointer,
         dst_size: usize,
     ) {
-        let mut lz = MermaidLzTable::Mermaid_ReadLzTable(
+        let mut lz = MermaidLzTable::read_lz_table(
             core,
             mode,
             src,
@@ -26,7 +26,7 @@ impl Algorithm for Mermaid {
             dst_size,
             dst - dst_start,
         );
-        lz.Mermaid_ProcessLzRuns(core, mode, src + src_used, dst, dst_size, dst - dst_start);
+        lz.process_lz_runs(core, mode, src + src_used, dst, dst_size, dst - dst_start);
     }
 }
 
@@ -102,7 +102,7 @@ struct MermaidLzTable {
 }
 
 impl MermaidLzTable {
-    pub(crate) fn Mermaid_ProcessLzRuns(
+    pub(crate) fn process_lz_runs(
         &mut self,
         core: &mut Core,
         mode: usize,
@@ -134,23 +134,9 @@ impl MermaidLzTable {
             };
 
             if mode == 0 {
-                self.Mermaid_Mode::<true>(
-                    core,
-                    dst,
-                    dst_size_cur,
-                    src_end,
-                    &mut saved_dist,
-                    startoff,
-                );
+                self.process::<true>(core, dst, dst_size_cur, src_end, &mut saved_dist, startoff);
             } else {
-                self.Mermaid_Mode::<false>(
-                    core,
-                    dst,
-                    dst_size_cur,
-                    src_end,
-                    &mut saved_dist,
-                    startoff,
-                );
+                self.process::<false>(core, dst, dst_size_cur, src_end, &mut saved_dist, startoff);
             }
             assert!(!self.length_stream.is_null());
 
@@ -164,7 +150,7 @@ impl MermaidLzTable {
         assert_eq!(self.length_stream, src_end);
     }
 
-    fn Mermaid_Mode<const ADD: bool>(
+    fn process<const ADD_MODE: bool>(
         &mut self,
         core: &mut Core,
         mut dst: Pointer,
@@ -197,7 +183,7 @@ impl MermaidLzTable {
             cmd_stream += 1;
             if cmd >= 24 {
                 let litlen = cmd & 7;
-                if ADD {
+                if ADD_MODE {
                     core.copy_64_add(dst, lit_stream, dst + recent_offs, litlen);
                 } else {
                     core.repeat_copy_64(dst, lit_stream, litlen);
@@ -235,7 +221,7 @@ impl MermaidLzTable {
                 length += 64;
                 assert!(dst_end - dst >= length);
                 assert!(lit_stream_end - lit_stream >= length);
-                if ADD {
+                if ADD_MODE {
                     core.copy_64_add(dst, lit_stream, dst + recent_offs, length);
                 } else {
                     core.repeat_copy_64(dst, lit_stream, length);
@@ -279,7 +265,7 @@ impl MermaidLzTable {
         }
 
         length = dst_end - dst;
-        if ADD {
+        if ADD_MODE {
             core.copy_64_add(dst, lit_stream, dst + recent_offs, length);
         } else {
             core.repeat_copy_64(dst, lit_stream, length);
@@ -293,7 +279,7 @@ impl MermaidLzTable {
 }
 
 impl MermaidLzTable {
-    fn Mermaid_ReadLzTable(
+    fn read_lz_table(
         core: &mut Core,
         mode: usize,
         mut src: Pointer,
@@ -320,7 +306,7 @@ impl MermaidLzTable {
 
         // Decode lit stream
         out = scratch;
-        src += core.Kraken_DecodeBytes(
+        src += core.decode_bytes(
             &mut out,
             src,
             src_end,
@@ -335,7 +321,7 @@ impl MermaidLzTable {
 
         // Decode flag stream
         out = scratch;
-        src += core.Kraken_DecodeBytes(
+        src += core.decode_bytes(
             &mut out,
             src,
             src_end,
@@ -369,7 +355,7 @@ impl MermaidLzTable {
             let mut off16_lo_count = 0;
             let mut off16_hi_count = 0;
             off16_hi = scratch;
-            src += core.Kraken_DecodeBytes(
+            src += core.decode_bytes(
                 &mut off16_hi,
                 src,
                 src_end,
@@ -381,7 +367,7 @@ impl MermaidLzTable {
             scratch += off16_hi_count;
 
             off16_lo = scratch;
-            src += core.Kraken_DecodeBytes(
+            src += core.decode_bytes(
                 &mut off16_lo,
                 src,
                 src_end,
@@ -440,7 +426,7 @@ impl MermaidLzTable {
             // ((uint64*)scratch)[2] = 0;
             // ((uint64*)scratch)[3] = 0;
 
-            src += MermaidLzTable::DecodeFarOffsets(
+            src += MermaidLzTable::decode_far_offsets(
                 core,
                 src,
                 src_end,
@@ -449,7 +435,7 @@ impl MermaidLzTable {
                 offset,
             );
 
-            src += MermaidLzTable::DecodeFarOffsets(
+            src += MermaidLzTable::decode_far_offsets(
                 core,
                 src,
                 src_end,
@@ -463,7 +449,7 @@ impl MermaidLzTable {
         lz
     }
 
-    fn DecodeFarOffsets(
+    fn decode_far_offsets(
         core: &mut Core,
         src: Pointer,
         src_end: Pointer,

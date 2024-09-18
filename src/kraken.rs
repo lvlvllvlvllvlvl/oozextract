@@ -6,7 +6,7 @@ use crate::pointer::{IntPointer, Pointer};
 // all the literals and copy lengths using huffman and second
 // phase runs the copy loop. This holds the tables needed by stage 2.
 #[derive(Default)]
-pub struct KrakenLzTable {
+pub(crate) struct KrakenLzTable {
     // Stream of (literal, match) pairs. The flag u8 contains
     // the length of the match, the length of the literal and whether
     // to use a recent offset.
@@ -30,7 +30,7 @@ pub struct KrakenLzTable {
 }
 
 #[derive(Debug)]
-pub struct Kraken;
+pub(crate) struct Kraken;
 
 impl Algorithm for Kraken {
     fn process(
@@ -44,20 +44,14 @@ impl Algorithm for Kraken {
         dst_size: usize,
     ) {
         assert!(mode <= 1);
-        let mut lz = KrakenLzTable::Kraken_ReadLzTable(
-            core,
-            src,
-            src + src_used,
-            dst,
-            dst_size,
-            dst - dst_start,
-        );
-        lz.Kraken_ProcessLzRuns(core, mode, dst, dst_size, dst - dst_start)
+        let mut lz =
+            KrakenLzTable::read_lz_table(core, src, src + src_used, dst, dst_size, dst - dst_start);
+        lz.process_lz_runs(core, mode, dst, dst_size, dst - dst_start)
     }
 }
 
 impl KrakenLzTable {
-    fn Kraken_ReadLzTable(
+    fn read_lz_table(
         core: &mut Core,
         mut src: Pointer,
         src_end: Pointer,
@@ -93,7 +87,7 @@ impl KrakenLzTable {
 
         // Decode lit stream, bounded by dst_size
         out = scratch;
-        n = core.Kraken_DecodeBytes(
+        n = core.decode_bytes(
             &mut out,
             src,
             src_end,
@@ -112,7 +106,7 @@ impl KrakenLzTable {
 
         // Decode command stream, bounded by dst_size
         out = scratch;
-        n = core.Kraken_DecodeBytes(
+        n = core.decode_bytes(
             &mut out,
             src,
             src_end,
@@ -139,7 +133,7 @@ impl KrakenLzTable {
             src += 1;
 
             packed_offs_stream = scratch;
-            n = core.Kraken_DecodeBytes(
+            n = core.decode_bytes(
                 &mut packed_offs_stream,
                 src,
                 src_end,
@@ -153,7 +147,7 @@ impl KrakenLzTable {
 
             if offs_scaling != 1 {
                 packed_offs_stream_extra = scratch;
-                n = core.Kraken_DecodeBytes(
+                n = core.decode_bytes(
                     &mut packed_offs_stream_extra,
                     src,
                     src_end,
@@ -169,7 +163,7 @@ impl KrakenLzTable {
         } else {
             // Decode packed offset stream, it's bounded by the command length.
             packed_offs_stream = scratch;
-            n = core.Kraken_DecodeBytes(
+            n = core.decode_bytes(
                 &mut packed_offs_stream,
                 src,
                 src_end,
@@ -184,7 +178,7 @@ impl KrakenLzTable {
 
         // Decode packed litlen stream. It's bounded by 1/4 of dst_size.
         packed_len_stream = scratch;
-        n = core.Kraken_DecodeBytes(
+        n = core.decode_bytes(
             &mut packed_len_stream,
             src,
             src_end,
@@ -206,7 +200,7 @@ impl KrakenLzTable {
         lz.len_stream = scratch.into();
         scratch += lz.len_stream_size * 4;
 
-        core.Kraken_UnpackOffsets(
+        core.unpack_offsets(
             src,
             src_end,
             packed_offs_stream,
@@ -223,7 +217,7 @@ impl KrakenLzTable {
         lz
     }
 
-    fn Kraken_ProcessLzRuns(
+    fn process_lz_runs(
         &mut self,
         core: &mut Core,
         mode: usize,

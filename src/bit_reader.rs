@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use crate::core::Core;
 use crate::pointer::Pointer;
 
@@ -20,8 +18,8 @@ pub struct BitReader2 {
 }
 
 impl BitReader {
-    // Read more bytes to make sure we always have at least 24 bits in |bits|.
-    pub fn Refill(&mut self, source: &Core) {
+    /// Read more bytes to make sure we always have at least 24 bits in |bits|.
+    pub fn refill(&mut self, source: &Core) {
         assert!(self.bitpos <= 24);
         while self.bitpos > 0 {
             if self.p < self.p_end {
@@ -32,9 +30,9 @@ impl BitReader {
         }
     }
 
-    // Read more bytes to make sure we always have at least 24 bits in |bits|,
-    // used when reading backwards.
-    pub fn RefillBackwards(&mut self, source: &Core) {
+    /// Read more bytes to make sure we always have at least 24 bits in |bits|,
+    /// used when reading backwards.
+    pub fn refill_backwards(&mut self, source: &Core) {
         assert!(self.bitpos <= 24);
         while self.bitpos > 0 {
             self.p -= 1;
@@ -45,68 +43,68 @@ impl BitReader {
         }
     }
 
-    // Refill bits then read a single bit.
-    pub fn ReadBit(&mut self, source: &Core) -> bool {
-        self.Refill(source);
+    /// Refill bits then read a single bit.
+    pub fn read_bit(&mut self, source: &Core) -> bool {
+        self.refill(source);
         let r = self.bits >> 31;
         self.bits <<= 1;
         self.bitpos += 1;
         r != 0
     }
 
-    pub fn ReadBitNoRefill(&mut self) -> bool {
+    pub fn read_bit_no_refill(&mut self) -> bool {
         let r = self.bits >> 31;
         self.bits <<= 1;
         self.bitpos += 1;
         r != 0
     }
 
-    // Read |n| bits without refilling.
-    pub fn ReadBitsNoRefill(&mut self, n: i32) -> i32 {
+    /// Read |n| bits without refilling.
+    pub fn read_bits_no_refill(&mut self, n: i32) -> i32 {
         let r = self.bits >> (32 - n);
         self.bits <<= n;
         self.bitpos += n;
         r as _
     }
 
-    // Read |n| bits without refilling, n may be zero.
-    pub fn ReadBitsNoRefillZero(&mut self, n: i32) -> i32 {
+    /// Read |n| bits without refilling, n may be zero.
+    pub fn read_bits_no_refill_zero(&mut self, n: i32) -> i32 {
         let r = self.bits >> 1 >> (31 - n);
         self.bits <<= n;
         self.bitpos += n;
         r as _
     }
 
-    pub fn ReadMoreThan24Bits(&mut self, source: &Core, n: i32) -> i32 {
+    pub fn read_more_than24bits(&mut self, source: &Core, n: i32) -> i32 {
         let mut rv;
         if n <= 24 {
-            rv = self.ReadBitsNoRefillZero(n);
+            rv = self.read_bits_no_refill_zero(n);
         } else {
             // no test coverage
-            rv = self.ReadBitsNoRefill(24) << (n - 24);
-            self.Refill(source);
-            rv += self.ReadBitsNoRefill(n - 24);
+            rv = self.read_bits_no_refill(24) << (n - 24);
+            self.refill(source);
+            rv += self.read_bits_no_refill(n - 24);
         }
-        self.Refill(source);
+        self.refill(source);
         rv
     }
 
-    pub fn ReadMoreThan24BitsB(&mut self, source: &Core, n: i32) -> i32 {
+    pub fn read_more_than_24_bits_b(&mut self, source: &Core, n: i32) -> i32 {
         let mut rv;
         if n <= 24 {
-            rv = self.ReadBitsNoRefillZero(n);
+            rv = self.read_bits_no_refill_zero(n);
         } else {
             // no test coverage
-            rv = self.ReadBitsNoRefill(24) << (n - 24);
-            self.RefillBackwards(source);
-            rv += self.ReadBitsNoRefill(n - 24);
+            rv = self.read_bits_no_refill(24) << (n - 24);
+            self.refill_backwards(source);
+            rv += self.read_bits_no_refill(n - 24);
         }
-        self.RefillBackwards(source);
+        self.refill_backwards(source);
         rv
     }
 
-    // Reads an offset code parametrized by |v|.
-    pub fn ReadDistance(&mut self, source: &Core, v: i32) -> i32 {
+    /// Reads an offset code parametrized by |v|.
+    pub fn read_distance(&mut self, source: &Core, v: i32) -> i32 {
         let w;
         let m;
         let n;
@@ -125,17 +123,17 @@ impl BitReader {
             m = (2 << n) - 1;
             self.bits = w & !m;
             rv = 8322816 + ((w & m) << 12);
-            self.Refill(source);
+            self.refill(source);
             rv += self.bits >> 20;
             self.bitpos += 12;
             self.bits <<= 12;
         }
-        self.Refill(source);
+        self.refill(source);
         rv as _
     }
 
-    // Reads an offset code parametrized by |v|, backwards.
-    pub fn ReadDistanceB(&mut self, source: &Core, v: i32) -> i32 {
+    /// Reads an offset code parametrized by |v|, backwards.
+    pub fn read_distance_b(&mut self, source: &Core, v: i32) -> i32 {
         let w;
         let m;
         let n;
@@ -155,47 +153,47 @@ impl BitReader {
             m = (2 << n) - 1;
             self.bits = w & !m;
             rv = 8322816 + ((w & m) << 12);
-            self.RefillBackwards(source);
+            self.refill_backwards(source);
             rv += self.bits >> (32 - 12);
             self.bitpos += 12;
             self.bits <<= 12;
         }
-        self.RefillBackwards(source);
+        self.refill_backwards(source);
         rv as _
     }
 
-    // Reads a length code.
-    pub fn ReadLength(&mut self, source: &Core) -> i32 {
+    /// Reads a length code.
+    pub fn read_length(&mut self, source: &Core) -> i32 {
         let mut n;
         n = self.leading_zeros();
         assert!(n <= 12);
         self.bitpos += n;
         self.bits <<= n;
-        self.Refill(source);
+        self.refill(source);
         n += 7;
         self.bitpos += n;
         let rv = (self.bits >> (32 - n)) - 64;
         self.bits <<= n;
-        self.Refill(source);
+        self.refill(source);
         rv as _
     }
 
-    // Reads a length code, backwards.
-    pub fn ReadLengthB(&mut self, source: &Core) -> i32 {
+    /// Reads a length code, backwards.
+    pub fn read_length_b(&mut self, source: &Core) -> i32 {
         let mut n = self.leading_zeros();
         assert!(n <= 12);
         self.bitpos += n;
         self.bits <<= n;
-        self.RefillBackwards(source);
+        self.refill_backwards(source);
         n += 7;
         self.bitpos += n;
         let rv = (self.bits >> (32 - n)) - 64;
         self.bits <<= n;
-        self.RefillBackwards(source);
+        self.refill_backwards(source);
         rv as _
     }
 
-    pub fn ReadFluff(&mut self, num_symbols: i32) -> usize {
+    pub fn read_fluff(&mut self, num_symbols: i32) -> usize {
         if num_symbols == 256 {
             return 0;
         }

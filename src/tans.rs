@@ -202,12 +202,12 @@ impl TansDecoder {
             a: [0; 256],
             b: [0; 256],
         };
-        bits.Refill(core);
-        if bits.ReadBitNoRefill() {
-            let q = bits.ReadBitsNoRefill(3);
-            let num_symbols = bits.ReadBitsNoRefill(8) + 1;
+        bits.refill(core);
+        if bits.read_bit_no_refill() {
+            let q = bits.read_bits_no_refill(3);
+            let num_symbols = bits.read_bits_no_refill(8) + 1;
             assert!(num_symbols >= 2);
-            let fluff = bits.ReadFluff(num_symbols);
+            let fluff = bits.read_fluff(num_symbols);
             let total_rice_values = num_symbols as usize + fluff;
             let mut rice = [0; 512 + 16];
 
@@ -218,19 +218,19 @@ impl TansDecoder {
                 bitpos: ((bits.bitpos - 24) & 7) as u32,
             };
 
-            core.DecodeGolombRiceLengths(&mut rice[..total_rice_values], &mut br2);
+            core.decode_golomb_rice_lengths(&mut rice[..total_rice_values], &mut br2);
 
             // Switch back to other bitreader impl
             bits.bitpos = 24;
             bits.p = br2.p;
             bits.bits = 0;
-            bits.Refill(core);
+            bits.refill(core);
             bits.bits <<= br2.bitpos;
             bits.bitpos += br2.bitpos as i32;
 
-            let range = core.Huff_ConvertToRanges(num_symbols, fluff, &rice, bits);
+            let range = core.convert_to_ranges(num_symbols, fluff, &rice, bits);
 
-            bits.Refill(core);
+            bits.refill(core);
 
             let l = 1 << l_bits;
             let mut cur_rice_ptr: &[u8] = &rice;
@@ -242,12 +242,12 @@ impl TansDecoder {
             for ri in range {
                 let mut symbol = ri.symbol as i32;
                 for _ in 0..ri.num {
-                    bits.Refill(core);
+                    bits.refill(core);
 
                     let nextra = cur_rice_ptr[0] as i32 + q;
                     cur_rice_ptr = &cur_rice_ptr[1..];
                     assert!(nextra <= 15);
-                    let mut v = bits.ReadBitsNoRefillZero(nextra) + (1 << nextra) - (1 << q);
+                    let mut v = bits.read_bits_no_refill_zero(nextra) + (1 << nextra) - (1 << q);
 
                     let average_div4 = average >> 2;
                     let mut limit = 2 * average_div4;
@@ -280,10 +280,10 @@ impl TansDecoder {
             let mut seen = [false; 256];
             let l = 1 << l_bits;
 
-            let count = bits.ReadBitsNoRefill(3) + 1;
+            let count = bits.read_bits_no_refill(3) + 1;
 
             let bits_per_sym = l_bits.ilog2() + 1;
-            let max_delta_bits = bits.ReadBitsNoRefill(bits_per_sym as i32);
+            let max_delta_bits = bits.read_bits_no_refill(bits_per_sym as i32);
 
             assert_ne!(max_delta_bits, 0);
             assert!(max_delta_bits <= l_bits);
@@ -295,12 +295,12 @@ impl TansDecoder {
             let mut total_weights = 0;
 
             for _ in 0..count {
-                bits.Refill(core);
+                bits.refill(core);
 
-                let sym = bits.ReadBitsNoRefill(8);
+                let sym = bits.read_bits_no_refill(8);
                 assert!(!seen[sym as usize], "{}", sym);
 
-                let delta = bits.ReadBitsNoRefill(max_delta_bits);
+                let delta = bits.read_bits_no_refill(max_delta_bits);
 
                 weight += delta;
 
@@ -318,9 +318,9 @@ impl TansDecoder {
                 total_weights += weight;
             }
 
-            bits.Refill(core);
+            bits.refill(core);
 
-            let sym = bits.ReadBitsNoRefill(8);
+            let sym = bits.read_bits_no_refill(8);
             assert!(!seen[sym as usize], "{}", sym);
 
             assert!(l - total_weights >= weight);
