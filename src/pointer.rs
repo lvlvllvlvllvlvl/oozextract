@@ -1,4 +1,5 @@
 use crate::core::Core;
+use std::mem::size_of;
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub enum PointerDest {
