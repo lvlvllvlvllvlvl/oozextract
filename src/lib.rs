@@ -1,4 +1,4 @@
-#![feature(portable_simd, array_chunks)]
+//#![feature(portable_simd, array_chunks)]
 #![allow(clippy::too_many_arguments)]
 
 mod bit_reader;
