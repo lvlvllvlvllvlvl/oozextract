@@ -115,6 +115,7 @@ impl HuffReader {
         while dst < dst_end {
             if src_mid - src <= 1 {
                 if src_mid - src == 1 {
+                    // no test coverage
                     src_bits |= (mem.get_byte(src) as u32) << src_bitpos;
                 }
             } else {

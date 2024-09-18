@@ -389,10 +389,6 @@ impl Core<'_> {
         }
     }
 
-    pub fn copy_64_bytes(&mut self, dest: Pointer, src: Pointer) {
-        self.memmove(dest, src, 64)
-    }
-
     pub fn copy_64_add(&mut self, dest: Pointer, lhs: Pointer, rhs: Pointer, n: usize) {
         for i in 0..n {
             self.set(

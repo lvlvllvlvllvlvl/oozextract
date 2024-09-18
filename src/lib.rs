@@ -1,7 +1,7 @@
 #![feature(portable_simd, array_chunks)]
 #![allow(clippy::too_many_arguments)]
 
-pub mod bit_reader;
+mod bit_reader;
 //pub mod error;
 mod algorithm;
 mod bitknit;
@@ -94,8 +94,13 @@ pub struct Extractor<In: Read + Seek> {
     lzna_state: Option<LznaState>,
 }
 
-impl<In: Read + Seek> Read for Extractor<In> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+impl<In: Read + Seek> Extractor<In> {
+    /// Buf should be the expected size of the output file.
+    /// You could also try reading blocks of 0x40000 bytes at a time,
+    /// but decompressors for some formats may fail if the output would be smaller
+    /// than the input buffer, as decompressed size doesn't appear to be encoded
+    /// in the compression format.
+    pub fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         log::debug!("reading to buf with size {}", buf.len());
         let mut bytes_written = 0;
         while bytes_written < buf.len() {
@@ -221,6 +226,7 @@ impl<In: Read + Seek> Extractor<In> {
             QuantumHeader::WholeMatch {
                 whole_match_distance,
             } => {
+                // no test coverage
                 if whole_match_distance > offset {
                     return self.io_error(
                         ErrorKind::InvalidInput,
@@ -236,14 +242,17 @@ impl<In: Read + Seek> Extractor<In> {
                 Ok(dst_bytes_left)
             }
             QuantumHeader::Memset { value } => {
+                // no test coverage
                 output[offset..][..dst_bytes_left].fill(value);
                 log::debug!("Set block to {}", value);
                 Ok(dst_bytes_left)
             }
-            QuantumHeader::Uncompressed => self
-                .input
-                .read_exact(&mut output[offset..][..dst_bytes_left])
-                .and(Ok(dst_bytes_left)),
+            QuantumHeader::Uncompressed => {
+                // no test coverage
+                self.input
+                    .read_exact(&mut output[offset..][..dst_bytes_left])
+                    .and(Ok(dst_bytes_left))
+            }
         }
     }
 
@@ -408,7 +417,7 @@ mod tests {
             let len = usize::from_le_bytes(buf);
             let buf = &mut vec![0; len];
             let mut extractor = Extractor::new(file);
-            extractor.read_exact(buf).unwrap();
+            extractor.read(buf).unwrap();
 
             let verify_file = format!("verify/{}", filename);
             log::debug!("compare to file {}", verify_file);
