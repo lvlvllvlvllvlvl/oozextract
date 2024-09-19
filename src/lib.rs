@@ -424,7 +424,11 @@ mod tests {
             let expected = fs::read(verify_file).unwrap();
             assert_eq!(buf.len(), expected.len());
             for (i, (actual, expect)) in buf.iter().zip(expected.iter()).enumerate() {
-                assert_eq!(actual, expect, "difference at byte {}", i);
+                assert_eq!(
+                    actual, expect,
+                    "difference in {}.{} at byte {}",
+                    filename, extension, i
+                );
             }
         }
         log::debug!("done");

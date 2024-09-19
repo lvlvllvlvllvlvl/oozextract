@@ -382,6 +382,10 @@ impl Core<'_> {
                     &mut self.tmp
                 }
             };
+            if bytes < src.index.abs_diff(dest.index) {
+                buf.copy_within(src.index..src.index + bytes, dest.index);
+                return;
+            }
             let mut n = 0;
             while n < bytes {
                 buf.copy_within(src.index + n..src.index + bytes.min(n + 8), dest.index + n);

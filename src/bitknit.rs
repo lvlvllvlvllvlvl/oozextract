@@ -178,13 +178,16 @@ impl<'a> Core<'a> {
         self.dst += 1;
     }
 
-    fn copy_chunks(&mut self, copy_length: usize, match_dist: usize, chunk_size: usize) {
-        for i in (0..copy_length).step_by(chunk_size) {
-            let dst = self.dst + i;
+    fn copy_chunks<const CHUNK_SIZE: usize>(&mut self, copy_length: usize, match_dist: usize) {
+        for i in 0..copy_length / CHUNK_SIZE {
+            let dst = self.dst + i * CHUNK_SIZE;
             let src = dst - match_dist;
-            let len = chunk_size.min(copy_length - i);
-            self.output.copy_within(src..src + len, dst);
+            self.output.copy_within(src..src + CHUNK_SIZE, dst);
         }
+        let rem = copy_length % CHUNK_SIZE;
+        let dst = self.dst + copy_length - rem;
+        let src = dst - match_dist;
+        self.output.copy_within(src..src + rem, dst);
     }
 
     fn last_match(&self) -> u8 {
@@ -295,10 +298,13 @@ impl<'a> Core<'a> {
             if match_dist == 1 {
                 let v = self.output[self.dst - 1];
                 self.output[self.dst..][..copy_length].fill(v);
+            } else if match_dist as usize > copy_length {
+                let src = self.dst - match_dist as usize;
+                self.output.copy_within(src..src + copy_length, self.dst);
             } else if match_dist >= 8 {
-                self.copy_chunks(copy_length, match_dist as usize, 8);
+                self.copy_chunks::<8>(copy_length, match_dist as usize);
             } else if match_dist >= 4 {
-                self.copy_chunks(copy_length, match_dist as usize, 4);
+                self.copy_chunks::<4>(copy_length, match_dist as usize);
             } else {
                 for i in 0..copy_length {
                     self.output[self.dst + i] = self.output[self.dst + i - match_dist as usize];
