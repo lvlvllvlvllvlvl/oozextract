@@ -1,3 +1,4 @@
+use crate::error::{ErrorContext, OozError};
 use std::array;
 
 type LznaBitModel = u16;
@@ -171,6 +172,8 @@ pub struct Lzna<'a> {
     src: usize,
     dst: usize,
 }
+
+impl<'a> ErrorContext for Lzna<'a> {}
 
 impl<'a> Lzna<'a> {
     pub(crate) fn new(input: &'a [u8], output: &'a mut [u8], dst: usize) -> Lzna<'a> {
@@ -423,7 +426,7 @@ impl<'a> Lzna<'a> {
         length
     }
 
-    pub(crate) fn decode_quantum(&mut self, lut: &mut LznaState) -> usize {
+    pub(crate) fn decode_quantum(&mut self, lut: &mut LznaState) -> Result<usize, OozError> {
         lut.preprocess_match_history();
         self.init();
         let mut dist = lut.match_history[4] as usize;
@@ -523,11 +526,11 @@ impl<'a> Lzna<'a> {
             }
         }
 
-        assert_eq!(self.dst, dst_end);
+        self.assert_eq(self.dst, dst_end)?;
 
         self.output[self.dst..][..4].copy_from_slice(&(self.bits_a as i32).to_le_bytes());
         self.output[self.dst + 4..].copy_from_slice(&(self.bits_b as i32).to_le_bytes());
 
-        self.src
+        Ok(self.src)
     }
 }

@@ -1,11 +1,11 @@
 //#![feature(portable_simd, array_chunks)]
 #![allow(clippy::too_many_arguments)]
-
-mod bit_reader;
-//pub mod error;
 mod algorithm;
+#[warn(clippy::indexing_slicing, clippy::unwrap_used, clippy::panic)]
+mod bit_reader;
 mod bitknit;
 mod core;
+mod error;
 mod huffman;
 mod kraken;
 mod leviathan;
@@ -14,15 +14,14 @@ mod mermaid;
 mod pointer;
 mod tans;
 
-use std::fmt::Debug;
-use std::io::{ErrorKind, Read, Seek};
-use std::panic::Location;
-
 use crate::core::Core;
+use crate::error::{End::*, ErrorBuilder, ErrorContext, OozError, ResultBuilder, WithContext};
 use crate::kraken::Kraken;
 use crate::leviathan::Leviathan;
 use crate::lzna::{Lzna, LznaState};
 use crate::mermaid::Mermaid;
+use std::fmt::Debug;
+use std::io::{Read, Seek};
 
 #[derive(Debug, Default)]
 pub enum DecoderType {
@@ -88,7 +87,6 @@ pub enum QuantumHeader {
 
 pub struct Extractor<In: Read + Seek> {
     input: In,
-    tmp: [u8; LARGE_BLOCK],
     header: BlockHeader,
     bitknit_state: Option<bitknit::State>,
     lzna_state: Option<LznaState>,
@@ -100,42 +98,19 @@ impl<In: Read + Seek> Extractor<In> {
     /// but decompressors for some formats may fail if the output would be smaller
     /// than the input buffer, as decompressed size doesn't appear to be encoded
     /// in the compression format.
-    pub fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    pub fn read(&mut self, buf: &mut [u8]) -> Result<usize, OozError> {
         log::debug!("reading to buf with size {}", buf.len());
         let mut bytes_written = 0;
         while bytes_written < buf.len() {
-            log::debug!(
-                "read: {:?}, written: {}, buffer size: {}",
-                self.input.stream_position()?,
-                bytes_written,
-                buf.len()
-            );
             if (bytes_written & 0x3FFFF) == 0 {
-                let buf = &mut self.tmp[..2];
-                match self.input.read_exact(buf) {
-                    Err(ref e) if e.kind() == ErrorKind::UnexpectedEof => {
-                        log::debug!("No more data. Wrote {} bytes", bytes_written);
-                        return Ok(bytes_written);
-                    }
-                    Err(e) => return Err(e),
-                    _ => self.parse_header()?,
-                }
+                self.parse_header()?
             }
             log::debug!("Parsed header {:?}", self.header);
-            match self.extract(buf, bytes_written) {
-                Ok(0) => {
-                    return if bytes_written > 0 {
-                        log::debug!("Input empty. Wrote {} bytes", bytes_written);
-                        Ok(bytes_written)
-                    } else {
-                        log::debug!("Write zero. Wrote {} bytes", bytes_written);
-                        self.io_error(ErrorKind::WriteZero, bytes_written)
-                    }
-                }
-                Ok(count) => {
+            match self.extract(buf, bytes_written)? {
+                0 => break,
+                count => {
                     bytes_written += count;
                 }
-                Err(e) => return Err(e),
             }
         }
         log::debug!("Output filled. Wrote {} bytes", bytes_written);
@@ -147,22 +122,25 @@ impl<In: Read + Seek> Extractor<In> {
     pub fn new(input: In) -> Extractor<In> {
         Extractor {
             input,
-            tmp: [0; LARGE_BLOCK],
             header: Default::default(),
             bitknit_state: None,
             lzna_state: None,
         }
     }
 
-    fn extract(&mut self, output: &mut [u8], offset: usize) -> std::io::Result<usize> {
+    fn extract(&mut self, output: &mut [u8], offset: usize) -> Result<usize, OozError> {
+        let tmp = &mut [0; LARGE_BLOCK];
         let dst_bytes_left = std::cmp::min(output.len() - offset, self.header.block_size());
 
         if self.header.uncompressed {
             let mut bytes_copied = 0;
             while bytes_copied < dst_bytes_left {
+                let out = self.slice_mut(output, offset + bytes_copied, Idx(dst_bytes_left))?;
                 let count = self
                     .input
-                    .read(&mut output[offset + bytes_copied..dst_bytes_left])?;
+                    .read(out)
+                    .at(self)
+                    .message(|_| format!("Copy failed after {} bytes", bytes_copied))?;
                 bytes_copied += count;
                 if count == 0 {
                     break;
@@ -178,32 +156,35 @@ impl<In: Read + Seek> Extractor<In> {
             QuantumHeader::Compressed {
                 compressed_size, ..
             } => {
-                let input = &mut self.tmp[..compressed_size];
-                self.input.read_exact(input)?;
+                let input = self.slice_mut(tmp, 0, Idx(compressed_size))?;
+                self.input
+                    .read_exact(input)
+                    .at(self)
+                    .message(|_| format!("Failed to read {} bytes", compressed_size))?;
                 if self.header.use_checksums {
                     // If you can find a file with checksums enabled maybe you can figure out which algorithm to use here
                 }
                 let bytes_read = match self.header.decoder_type {
                     DecoderType::Kraken => {
-                        Core::new(input, output).decode_quantum(offset, dst_bytes_left, Kraken)
+                        Core::new(input, output, offset, dst_bytes_left).decode_quantum(Kraken)
                     }
                     DecoderType::Mermaid => {
-                        Core::new(input, output).decode_quantum(offset, dst_bytes_left, Mermaid)
+                        Core::new(input, output, offset, dst_bytes_left).decode_quantum(Mermaid)
                     }
                     DecoderType::Leviathan => {
-                        Core::new(input, output).decode_quantum(offset, dst_bytes_left, Leviathan)
+                        Core::new(input, output, offset, dst_bytes_left).decode_quantum(Leviathan)
                     }
                     DecoderType::Bitknit => {
                         if self.header.restart_decoder {
                             self.bitknit_state = Some(bitknit::State::new());
                             self.header.restart_decoder = false;
                         }
-                        let mut bitknit = bitknit::Core::new(
-                            input,
-                            &mut output[..offset + dst_bytes_left],
-                            self.bitknit_state.as_mut().unwrap(),
-                            offset,
-                        );
+                        let out = self.slice_mut(output, 0, Idx(offset + dst_bytes_left))?;
+                        let state = self
+                            .bitknit_state
+                            .as_mut()
+                            .message(|_| "Bitknit uninitialized".into())?;
+                        let mut bitknit = bitknit::Core::new(input, out, state, offset);
                         bitknit.decode()
                     }
                     DecoderType::Lzna => {
@@ -211,11 +192,16 @@ impl<In: Read + Seek> Extractor<In> {
                             self.lzna_state = Some(LznaState::new());
                             self.header.restart_decoder = false;
                         }
-                        Lzna::new(input, &mut output[..offset + dst_bytes_left], offset)
-                            .decode_quantum(self.lzna_state.as_mut().unwrap())
+                        let out = self.slice_mut(output, 0, Idx(offset + dst_bytes_left))?;
+                        let state = self
+                            .lzna_state
+                            .as_mut()
+                            .message(|_| "Lzna uninitialized".into())?;
+                        Lzna::new(input, out, offset).decode_quantum(state)
                     }
-                };
-                assert_eq!(bytes_read, compressed_size);
+                }
+                .at(self)?;
+                self.assert_eq(bytes_read, compressed_size)?;
                 log::debug!(
                     "Extracted {} bytes from {}",
                     dst_bytes_left,
@@ -228,13 +214,10 @@ impl<In: Read + Seek> Extractor<In> {
             } => {
                 // no test coverage
                 if whole_match_distance > offset {
-                    return self.io_error(
-                        ErrorKind::InvalidInput,
-                        format!(
-                            "Distance {} invalid - only {} bytes buffered",
-                            whole_match_distance, offset
-                        ),
-                    );
+                    self.raise(format!(
+                        "Distance {} invalid - only {} bytes buffered",
+                        whole_match_distance, offset
+                    ))?
                 }
                 let from = offset - whole_match_distance;
                 let to = from + dst_bytes_left;
@@ -243,27 +226,28 @@ impl<In: Read + Seek> Extractor<In> {
             }
             QuantumHeader::Memset { value } => {
                 // no test coverage
-                output[offset..][..dst_bytes_left].fill(value);
+                self.slice_mut(output, offset, Len(dst_bytes_left))?
+                    .fill(value);
                 log::debug!("Set block to {}", value);
                 Ok(dst_bytes_left)
             }
             QuantumHeader::Uncompressed => {
                 // no test coverage
+                let out = self.slice_mut(output, offset, Len(dst_bytes_left))?;
                 self.input
-                    .read_exact(&mut output[offset..][..dst_bytes_left])
+                    .read_exact(out)
                     .and(Ok(dst_bytes_left))
+                    .at(self)
+                    .message(|_| format!("{} uncompressed bytes", dst_bytes_left))?;
+                Ok(dst_bytes_left)
             }
         }
     }
 
-    fn parse_header(&mut self) -> Result<(), std::io::Error> {
-        let b1 = self.tmp[0];
-        let b2 = self.tmp[1];
+    fn parse_header(&mut self) -> Result<(), OozError> {
+        let [b1, b2] = self.read_bytes(2)?;
         if ((b1 & 0xF) != 0xC) || (((b1 >> 4) & 3) != 0) {
-            self.io_error(
-                ErrorKind::InvalidData,
-                u16::from_le_bytes(*self.tmp.first_chunk().unwrap()),
-            )?
+            self.raise(format!("Invalid header {:X}", u16::from_le_bytes([b1, b2])))?
         } else {
             self.header = BlockHeader {
                 restart_decoder: (b1 >> 7) & 1 == 1,
@@ -275,7 +259,7 @@ impl<In: Read + Seek> Extractor<In> {
         }
     }
 
-    fn parse_quantum_header(&mut self) -> std::io::Result<QuantumHeader> {
+    fn parse_quantum_header(&mut self) -> Result<QuantumHeader, OozError> {
         if self.header.block_size() == LARGE_BLOCK {
             let v = usize::from_be_bytes(self.read_bytes(3)?);
             let size = v & 0x3FFFF;
@@ -295,7 +279,7 @@ impl<In: Read + Seek> Extractor<In> {
                     value: self.read_bytes::<1>(1)?[0],
                 })
             } else {
-                self.io_error(ErrorKind::InvalidData, v)
+                self.raise(format!("Invalid header data {}", v))?
             }
         } else {
             let v = u16::from_be_bytes(self.read_bytes(2)?);
@@ -320,24 +304,24 @@ impl<In: Read + Seek> Extractor<In> {
                         value: self.read_bytes::<1>(1).map(|p| p[0])?,
                     }),
                     2 => Ok(QuantumHeader::Uncompressed),
-                    _ => self.io_error(ErrorKind::InvalidData, v),
+                    _ => self.raise(format!("unexpected match type {}", v))?,
                 }
             }
         }
     }
 
-    fn decoder_type(&mut self, value: u8) -> Result<DecoderType, std::io::Error> {
+    fn decoder_type(&mut self, value: u8) -> Result<DecoderType, OozError> {
         match value {
             0x5 => Ok(DecoderType::Lzna),
             0x6 => Ok(DecoderType::Kraken),
             0xA => Ok(DecoderType::Mermaid),
             0xB => Ok(DecoderType::Bitknit),
             0xC => Ok(DecoderType::Leviathan),
-            _ => self.io_error(ErrorKind::InvalidData, value),
+            _ => self.raise(format!("Unknown decoder type {:X}", value))?,
         }
     }
 
-    fn parse_whole_match(&mut self) -> std::io::Result<usize> {
+    fn parse_whole_match(&mut self) -> Result<usize, OozError> {
         let v = usize::from(u16::from_be_bytes(self.read_bytes(2)?));
         if v < 0x8000 {
             let mut x = 0;
@@ -351,40 +335,30 @@ impl<In: Read + Seek> Extractor<In> {
                     return Ok(v + 0x8000 + (x << 15) + 1);
                 }
             }
-            self.io_error(ErrorKind::InvalidData, (v, x, pos))
+            self.raise(format!("{}, {}, {}", v, x, pos))?
         } else {
             Ok(v - 0x8000 + 1)
         }
     }
 
-    fn read_bytes<const N: usize>(&mut self, to_read: usize) -> std::io::Result<[u8; N]> {
-        assert!(to_read <= N);
+    fn read_bytes<const N: usize>(&mut self, to_read: usize) -> Result<[u8; N], ErrorBuilder> {
+        self.assert_le(to_read, N)?;
         let mut buf = [0; N];
-        if to_read < N {
-            buf.fill(0)
-        }
-        if let Err(e) = self.input.read_exact(&mut buf[N - to_read..]) {
-            log::error!(
-                "{}: read failed, expected {} bytes. {:x?}",
-                Location::caller(),
-                to_read,
-                e
-            );
-        }
-        Ok(buf)
+        self.input
+            .read_exact(&mut buf[N - to_read..])
+            .and(Ok(buf))
+            .at(self)
+            .message(|_| format!("Expected {} bytes", to_read))
     }
+}
 
-    #[track_caller]
-    fn io_error<T, D: Debug>(&mut self, kind: ErrorKind, msg: D) -> std::io::Result<T> {
-        Err(std::io::Error::new(
-            kind,
-            format!(
-                "{}: {:x?} at {}",
-                Location::caller(),
-                msg,
-                self.input.stream_position()?
-            ),
-        ))
+impl<In: Read + Seek> ErrorContext for Extractor<In> {
+    fn describe(&mut self) -> Option<String> {
+        Some(if let Ok(position) = self.input.stream_position() {
+            format!("header: {:?}, input bytes read: {}", self.header, position)
+        } else {
+            format!("header: {:?}", self.header)
+        })
     }
 }
 
@@ -417,7 +391,10 @@ mod tests {
             let len = usize::from_le_bytes(buf);
             let buf = &mut vec![0; len];
             let mut extractor = Extractor::new(file);
-            extractor.read(buf).unwrap();
+            if let Err(e) = extractor.read(buf) {
+                log::error!("Extracting {}.{} failed: {}", filename, extension, e);
+                panic!();
+            }
 
             let verify_file = format!("verify/{}", filename);
             log::debug!("compare to file {}", verify_file);

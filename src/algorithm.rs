@@ -1,4 +1,5 @@
 use crate::core::Core;
+use crate::error::OozError;
 use crate::pointer::Pointer;
 
 pub trait Algorithm {
@@ -11,5 +12,5 @@ pub trait Algorithm {
         dst_start: Pointer,
         dst: Pointer,
         dst_size: usize,
-    );
+    ) -> Result<(), OozError>;
 }

@@ -1,4 +1,6 @@
 use crate::core::Core;
+use crate::error::{ErrorBuilder, ErrorContext, ResultBuilder, WithContext};
+use std::fmt::{Display, Formatter};
 use std::mem::size_of;
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
@@ -9,6 +11,12 @@ pub enum PointerDest {
     Output,
     Scratch,
     Temp,
+}
+
+impl Display for PointerDest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 impl PartialOrd for PointerDest {
@@ -22,10 +30,18 @@ impl PartialOrd for PointerDest {
 }
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, PartialOrd)]
-pub struct Pointer {
+pub(crate) struct Pointer {
     pub into: PointerDest,
     pub index: usize,
 }
+
+impl Display for Pointer {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}[{}]", self.into, self.index)
+    }
+}
+
+impl ErrorContext for Pointer {}
 
 impl Pointer {
     pub fn input(index: usize) -> Self {
@@ -130,27 +146,29 @@ impl std::ops::SubAssign<i32> for Pointer {
 }
 
 impl std::ops::Sub<Pointer> for Pointer {
-    type Output = usize;
+    type Output = Result<usize, ErrorBuilder>;
 
-    fn sub(self, rhs: Pointer) -> Self::Output {
-        assert_eq!(self.into, rhs.into);
-        self.index - rhs.index
+    fn sub(mut self, rhs: Pointer) -> Self::Output {
+        self.assert_eq(self.into, rhs.into)?;
+        self.index
+            .checked_sub(rhs.index)
+            .message(|_| format!("{} - {}", self.index, rhs.index))
     }
 }
 
 impl std::ops::Sub<usize> for Pointer {
-    type Output = Pointer;
+    type Output = Result<Pointer, ErrorBuilder>;
 
     fn sub(self, rhs: usize) -> Self::Output {
-        Pointer {
-            index: self.index - rhs,
-            ..self
-        }
+        self.index
+            .checked_sub(rhs)
+            .map(|index| Pointer { index, ..self })
+            .message(|_| format!("{} - {}", self.index, rhs))
     }
 }
 
 impl std::ops::Sub<u32> for Pointer {
-    type Output = Pointer;
+    type Output = Result<Pointer, ErrorBuilder>;
 
     fn sub(self, rhs: u32) -> Self::Output {
         self.sub(rhs as usize)
@@ -158,24 +176,31 @@ impl std::ops::Sub<u32> for Pointer {
 }
 
 impl std::ops::Sub<i32> for Pointer {
-    type Output = Pointer;
+    type Output = Result<Pointer, ErrorBuilder>;
 
-    fn sub(self, rhs: i32) -> Self::Output {
-        Pointer {
-            index: self
-                .index
-                .checked_add_signed(-isize::try_from(rhs).unwrap())
-                .unwrap(),
-            ..self
-        }
+    fn sub(mut self, rhs: i32) -> Self::Output {
+        isize::try_from(rhs)
+            .at(&mut self)?
+            .checked_neg()
+            .and_then(|v| self.index.checked_add_signed(v))
+            .map(|index| Pointer { index, ..self })
+            .message(|_| format!("{} - {}", self.index, rhs))
     }
 }
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, PartialOrd)]
-pub struct IntPointer {
+pub(crate) struct IntPointer {
     pub into: PointerDest,
     pub index: usize,
 }
+
+impl Display for IntPointer {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}[{}]", self.into, self.index)
+    }
+}
+
+impl ErrorContext for IntPointer {}
 
 impl std::ops::Add<usize> for IntPointer {
     type Output = Self;
@@ -206,22 +231,25 @@ impl std::ops::AddAssign<usize> for IntPointer {
 }
 
 impl std::ops::Sub<IntPointer> for IntPointer {
-    type Output = usize;
+    type Output = Result<usize, ErrorBuilder>;
 
-    fn sub(self, rhs: IntPointer) -> Self::Output {
-        assert_eq!(self.into, rhs.into);
-        (self.index - rhs.index) / 4
+    fn sub(mut self, rhs: IntPointer) -> Self::Output {
+        self.assert_eq(self.into, rhs.into)?;
+        self.index
+            .checked_sub(rhs.index)
+            .map(|v| v / 4)
+            .message(|_| format!("{} - {}", self, rhs))
     }
 }
 
 impl std::ops::Sub<usize> for IntPointer {
-    type Output = IntPointer;
+    type Output = Result<IntPointer, ErrorBuilder>;
 
     fn sub(self, rhs: usize) -> Self::Output {
-        IntPointer {
-            index: self.index - (rhs * 4),
-            ..self
-        }
+        self.index
+            .checked_sub(rhs * 4)
+            .map(|index| IntPointer { index, ..self })
+            .message(|_| format!("{} - {} * 4", self, rhs))
     }
 }
 
@@ -244,14 +272,6 @@ impl From<IntPointer> for Pointer {
 }
 
 impl Core<'_> {
-    pub fn new<'a>(input: &'a [u8], output: &'a mut [u8]) -> Core<'a> {
-        Core {
-            input,
-            output,
-            scratch: Vec::new(),
-            tmp: Vec::new(),
-        }
-    }
     pub fn get_byte(&self, p: Pointer) -> u8 {
         match p.into {
             PointerDest::Null => panic!(),

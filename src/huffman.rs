@@ -1,4 +1,5 @@
 use crate::core::Core;
+use crate::error::{ErrorContext, OozError};
 use crate::pointer::Pointer;
 
 pub const BASE_PREFIX: [usize; 12] = [
@@ -24,8 +25,10 @@ pub struct HuffReader {
     pub src_end_bits: u32,
 }
 
+impl ErrorContext for HuffReader {}
+
 impl HuffReader {
-    pub fn decode_bytes(&mut self, mem: &mut Core, lut: &HuffRevLut) {
+    pub fn decode_bytes(&mut self, mem: &mut Core, lut: &HuffRevLut) -> Result<(), OozError> {
         let mut src = self.src;
         let mut src_bits = self.src_bits;
         let mut src_bitpos = self.src_bitpos;
@@ -46,7 +49,7 @@ impl HuffReader {
 
         assert!(src <= src_mid, "{:?} > {:?}", src, src_mid);
 
-        if self.src_end - src_mid >= 4 && dst_end - dst >= 6 {
+        if (self.src_end - src_mid)? >= 4 && (dst_end - dst)? >= 6 {
             dst_end -= 5;
             src_end -= 4;
 
@@ -113,8 +116,8 @@ impl HuffReader {
             src_mid_bitpos &= 7;
         }
         while dst < dst_end {
-            if src_mid - src <= 1 {
-                if src_mid - src == 1 {
+            if (src_mid - src)? <= 1 {
+                if (src_mid - src)? == 1 {
                     // no test coverage
                     src_bits |= (mem.get_byte(src) as u32) << src_bitpos;
                 }
@@ -131,14 +134,14 @@ impl HuffReader {
             src_bitpos &= 7;
 
             if dst < dst_end {
-                if src_end - src_mid <= 1 {
-                    if src_end - src_mid == 1 {
+                if (src_end - src_mid)? <= 1 {
+                    if (src_end - src_mid)? == 1 {
                         let mid = mem.get_byte(src_mid) as u32;
                         src_end_bits |= mid << src_end_bitpos;
                         src_mid_bits |= mid << src_mid_bitpos;
                     }
                 } else {
-                    let v = mem.get_bytes_as_usize_le(src_end - 2, 2) as u32;
+                    let v = mem.get_bytes_as_usize_le((src_end - 2)?, 2) as u32;
                     src_end_bits |= (((v >> 8) | (v << 8)) & 0xffff) << src_end_bitpos;
                     src_mid_bits |=
                         (mem.get_bytes_as_usize_le(src_mid, 2) as u32) << src_mid_bitpos;
@@ -163,8 +166,9 @@ impl HuffReader {
             assert!(src <= src_mid, "{:?} > {:?}", src, src_mid);
             assert!(src_mid <= src_end, "{:?} > {:?}", src_mid, src_end);
         }
-        assert_eq!(src, self.src_mid_org);
-        assert_eq!(src_end, src_mid);
+        self.assert_eq(src, self.src_mid_org)?;
+        self.assert_eq(src_end, src_mid)?;
+        Ok(())
     }
 }
 
@@ -180,8 +184,12 @@ pub struct HuffRevLut {
     pub bits2sym: [u8; 2048],
 }
 
-impl HuffRevLut {
-    pub fn make_lut(prefix_cur: &[usize; 12], syms: &[u8; 1280]) -> HuffRevLut {
+impl Core<'_> {
+    pub fn make_lut(
+        &mut self,
+        prefix_cur: &[usize; 12],
+        syms: &[u8; 1280],
+    ) -> Result<HuffRevLut, OozError> {
         let mut bits2len = [0u8; 2048 + 16];
         let mut bits2sym = [0u8; 2048 + 16];
         let mut currslot = 0;
@@ -210,11 +218,11 @@ impl HuffRevLut {
             currslot += num_to_set;
         }
 
-        assert_eq!(currslot, 2048);
-        HuffRevLut {
+        self.assert_eq(currslot, 2048)?;
+        Ok(HuffRevLut {
             bits2len: reverse_lut(&bits2len),
             bits2sym: reverse_lut(&bits2sym),
-        }
+        })
     }
 }
 

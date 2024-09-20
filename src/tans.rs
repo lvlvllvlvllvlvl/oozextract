@@ -1,5 +1,6 @@
 use crate::bit_reader::{BitReader, BitReader2};
 use crate::core::Core;
+use crate::error::{ErrorContext, OozError, WithContext};
 use crate::pointer::Pointer;
 
 #[derive(Default)]
@@ -16,8 +17,10 @@ pub struct TansDecoder {
     pub state: [usize; 5],
 }
 
+impl ErrorContext for TansDecoder {}
+
 impl TansDecoder {
-    pub fn decode(&mut self, core: &mut Core) {
+    pub fn decode(&mut self, core: &mut Core) -> Result<(), OozError> {
         assert!(
             self.ptr_f <= self.ptr_b,
             "{:?} > {:?}",
@@ -34,7 +37,7 @@ impl TansDecoder {
                 self.tans_forward_round(core, step);
             } else {
                 if step & 1 == 1 {
-                    self.tans_backward_bits(core);
+                    self.tans_backward_bits(core).at(self)?;
                 }
                 self.tans_backward_round(core, step - 5);
             }
@@ -50,6 +53,7 @@ impl TansDecoder {
         assert_eq!(states_or & !0xFF, 0, "{:X}", states_or);
 
         core.set_bytes(self.dst_end, &self.state.map(|s| s as u8));
+        Ok(())
     }
 
     fn tans_forward_bits(&mut self, core: &mut Core) {
@@ -67,10 +71,11 @@ impl TansDecoder {
         self.bits_f >>= e.bits_x;
     }
 
-    fn tans_backward_bits(&mut self, core: &mut Core) {
-        self.bits_b |= core.get_bytes_as_usize_be(self.ptr_b - 4, 4) << self.bitpos_b;
+    fn tans_backward_bits(&mut self, core: &mut Core) -> Result<(), OozError> {
+        self.bits_b |= core.get_bytes_as_usize_be((self.ptr_b - 4)?, 4) << self.bitpos_b;
         self.ptr_b -= (31 - self.bitpos_b) >> 3;
         self.bitpos_b |= 24;
+        Ok(())
     }
 
     fn tans_backward_round(&mut self, core: &mut Core, i: usize) {
@@ -195,7 +200,11 @@ impl TansDecoder {
     }
 
     /// Tans_DecodeTable
-    pub fn decode_table(core: &mut Core, bits: &mut BitReader, l_bits: i32) -> TansData {
+    pub fn decode_table(
+        core: &mut Core,
+        bits: &mut BitReader,
+        l_bits: i32,
+    ) -> Result<TansData, OozError> {
         let mut tans_data = TansData {
             a_used: 0,
             b_used: 0,
@@ -213,12 +222,13 @@ impl TansDecoder {
 
             // another bit reader...
             let mut br2 = BitReader2 {
-                p: bits.p - ((24 - bits.bitpos + 7) >> 3) as u32,
+                p: (bits.p - ((24 - bits.bitpos + 7) >> 3) as u32)?,
                 p_end: bits.p_end,
                 bitpos: ((bits.bitpos - 24) & 7) as u32,
             };
 
-            core.decode_golomb_rice_lengths(&mut rice[..total_rice_values], &mut br2);
+            core.decode_golomb_rice_lengths(&mut rice[..total_rice_values], &mut br2)
+                .at(&mut tans_data)?;
 
             // Switch back to other bitreader impl
             bits.bitpos = 24;
@@ -228,7 +238,9 @@ impl TansDecoder {
             bits.bits <<= br2.bitpos;
             bits.bitpos += br2.bitpos as i32;
 
-            let range = core.convert_to_ranges(num_symbols, fluff, &rice, bits);
+            let range = core
+                .convert_to_ranges(num_symbols, fluff, &rice, bits)
+                .at(&mut tans_data)?;
 
             bits.refill(core);
 
@@ -273,9 +285,9 @@ impl TansDecoder {
             }
             tans_data.a_used = (256 - tanstable_a.len()) as _;
             tans_data.b_used = (256 - tanstable_b.len()) as _;
-            assert_eq!(somesum, l);
+            tans_data.assert_eq(somesum, l)?;
 
-            tans_data
+            Ok(tans_data)
         } else {
             let mut seen = [false; 256];
             let l = 1 << l_bits;
@@ -337,7 +349,7 @@ impl TansDecoder {
             tans_data.a[..a_used].sort_unstable();
             tans_data.b[..b_used].sort_unstable();
 
-            tans_data
+            Ok(tans_data)
         }
     }
 }
@@ -356,3 +368,5 @@ pub struct TansData {
     pub a: [u8; 256],
     pub b: [u32; 256],
 }
+
+impl ErrorContext for TansData {}

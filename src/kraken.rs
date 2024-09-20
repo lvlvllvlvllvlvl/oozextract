@@ -1,5 +1,6 @@
 use crate::algorithm::Algorithm;
 use crate::core::Core;
+use crate::error::{ErrorContext, OozError, WithContext};
 use crate::pointer::{IntPointer, Pointer};
 
 // Kraken decompression happens in two phases, first one decodes
@@ -29,6 +30,8 @@ pub(crate) struct KrakenLzTable {
     len_stream_size: usize,
 }
 
+impl ErrorContext for KrakenLzTable {}
+
 #[derive(Debug)]
 pub(crate) struct Kraken;
 
@@ -42,23 +45,25 @@ impl Algorithm for Kraken {
         dst_start: Pointer,
         dst: Pointer,
         dst_size: usize,
-    ) {
-        assert!(mode <= 1);
-        let mut lz =
-            KrakenLzTable::read_lz_table(core, src, src + src_used, dst, dst_size, dst - dst_start);
-        lz.process_lz_runs(core, mode, dst, dst_size, dst - dst_start)
+    ) -> Result<(), OozError> {
+        let mut lz = KrakenLzTable::default();
+        lz.assert_le(mode, 1)?;
+        let offset = (dst - dst_start)?;
+        lz.read_lz_table(core, src, src + src_used, dst, dst_size, offset)?;
+        lz.process_lz_runs(core, mode, dst, dst_size, offset)
     }
 }
 
 impl KrakenLzTable {
     fn read_lz_table(
+        &mut self,
         core: &mut Core,
         mut src: Pointer,
         src_end: Pointer,
         mut dst: Pointer,
         dst_size: usize,
         offset: usize,
-    ) -> KrakenLzTable {
+    ) -> Result<(), OozError> {
         let mut out;
         let mut decode_count = 0;
         let mut n;
@@ -66,7 +71,7 @@ impl KrakenLzTable {
         let mut packed_len_stream;
         let mut scratch = Pointer::scratch(0);
 
-        assert!(src_end - src >= 13, "{:?} {:?}", src_end, src);
+        assert!((src_end - src)? >= 13, "{:?} {:?}", src_end, src);
 
         if offset == 0 {
             core.memmove(dst, src, 8);
@@ -87,41 +92,42 @@ impl KrakenLzTable {
 
         // Decode lit stream, bounded by dst_size
         out = scratch;
-        n = core.decode_bytes(
-            &mut out,
-            src,
-            src_end,
-            &mut decode_count,
-            dst_size,
-            force_copy,
-            scratch,
-        );
+        n = core
+            .decode_bytes(
+                &mut out,
+                src,
+                src_end,
+                &mut decode_count,
+                dst_size,
+                force_copy,
+                scratch,
+            )
+            .at(self)?;
+        self.lit_stream = out;
+        self.lit_stream_size = decode_count;
         src += n;
-        let mut lz = KrakenLzTable {
-            lit_stream: out,
-            lit_stream_size: decode_count,
-            ..Default::default()
-        };
         scratch += decode_count;
 
         // Decode command stream, bounded by dst_size
         out = scratch;
-        n = core.decode_bytes(
-            &mut out,
-            src,
-            src_end,
-            &mut decode_count,
-            dst_size,
-            force_copy,
-            scratch,
-        );
+        n = core
+            .decode_bytes(
+                &mut out,
+                src,
+                src_end,
+                &mut decode_count,
+                dst_size,
+                force_copy,
+                scratch,
+            )
+            .at(self)?;
         src += n;
-        lz.cmd_stream = out;
-        lz.cmd_stream_size = decode_count;
+        self.cmd_stream = out;
+        self.cmd_stream_size = decode_count;
         scratch += decode_count;
 
         // Check if to decode the multistuff crap
-        assert!(src_end - src >= 3, "{:?} {:?}", src_end, src);
+        assert!((src_end - src)? >= 3, "{:?} {:?}", src_end, src);
 
         let mut offs_scaling = 0;
         let mut packed_offs_stream_extra = Pointer::null();
@@ -133,88 +139,97 @@ impl KrakenLzTable {
             src += 1;
 
             packed_offs_stream = scratch;
-            n = core.decode_bytes(
-                &mut packed_offs_stream,
-                src,
-                src_end,
-                &mut lz.offs_stream_size,
-                lz.cmd_stream_size,
-                false,
-                scratch,
-            );
+            n = core
+                .decode_bytes(
+                    &mut packed_offs_stream,
+                    src,
+                    src_end,
+                    &mut self.offs_stream_size,
+                    self.cmd_stream_size,
+                    false,
+                    scratch,
+                )
+                .at(self)?;
             src += n;
-            scratch += lz.offs_stream_size;
+            scratch += self.offs_stream_size;
 
             if offs_scaling != 1 {
                 packed_offs_stream_extra = scratch;
-                n = core.decode_bytes(
-                    &mut packed_offs_stream_extra,
-                    src,
-                    src_end,
-                    &mut decode_count,
-                    lz.offs_stream_size,
-                    false,
-                    scratch,
-                );
-                assert_eq!(decode_count, lz.offs_stream_size);
+                n = core
+                    .decode_bytes(
+                        &mut packed_offs_stream_extra,
+                        src,
+                        src_end,
+                        &mut decode_count,
+                        self.offs_stream_size,
+                        false,
+                        scratch,
+                    )
+                    .at(self)?;
+                self.assert_eq(decode_count, self.offs_stream_size)?;
                 src += n;
                 scratch += decode_count;
             }
         } else {
             // Decode packed offset stream, it's bounded by the command length.
             packed_offs_stream = scratch;
-            n = core.decode_bytes(
-                &mut packed_offs_stream,
-                src,
-                src_end,
-                &mut lz.offs_stream_size,
-                lz.cmd_stream_size,
-                false,
-                scratch,
-            );
+            n = core
+                .decode_bytes(
+                    &mut packed_offs_stream,
+                    src,
+                    src_end,
+                    &mut self.offs_stream_size,
+                    self.cmd_stream_size,
+                    false,
+                    scratch,
+                )
+                .at(self)?;
             src += n;
-            scratch += lz.offs_stream_size;
+            scratch += self.offs_stream_size;
         }
 
         // Decode packed litlen stream. It's bounded by 1/4 of dst_size.
         packed_len_stream = scratch;
-        n = core.decode_bytes(
-            &mut packed_len_stream,
-            src,
-            src_end,
-            &mut lz.len_stream_size,
-            dst_size >> 2,
-            false,
-            scratch,
-        );
+        n = core
+            .decode_bytes(
+                &mut packed_len_stream,
+                src,
+                src_end,
+                &mut self.len_stream_size,
+                dst_size >> 2,
+                false,
+                scratch,
+            )
+            .at(self)?;
         src += n;
-        scratch += lz.len_stream_size;
+        scratch += self.len_stream_size;
 
         // Reserve memory for final dist stream
         scratch = scratch.align(16);
-        lz.offs_stream = scratch.into();
-        scratch += lz.offs_stream_size * 4;
+        self.offs_stream = scratch.into();
+        scratch += self.offs_stream_size * 4;
 
         // Reserve memory for final len stream
         scratch = scratch.align(16);
-        lz.len_stream = scratch.into();
-        scratch += lz.len_stream_size * 4;
+        self.len_stream = scratch.into();
+        scratch += self.len_stream_size * 4;
 
         core.unpack_offsets(
             src,
             src_end,
             packed_offs_stream,
             packed_offs_stream_extra,
-            lz.offs_stream_size,
+            self.offs_stream_size,
             offs_scaling,
             packed_len_stream,
-            lz.len_stream_size,
-            lz.offs_stream,
-            lz.len_stream,
+            self.len_stream_size,
+            self.offs_stream,
+            self.len_stream,
             false,
-        );
+        )
+        .at(self)?;
 
-        lz
+        Ok(())
     }
 
     fn process_lz_runs(
@@ -224,7 +239,7 @@ impl KrakenLzTable {
         mut dst: Pointer,
         dst_size: usize,
         offset: usize,
-    ) {
+    ) -> Result<(), OozError> {
         let dst_end = dst + dst_size;
         if offset == 0 {
             dst += 8
@@ -302,16 +317,17 @@ impl KrakenLzTable {
         }
 
         // check for incorrect input
-        assert_eq!(offs_stream, offs_stream_end);
-        assert_eq!(len_stream, len_stream_end);
+        self.assert_eq(offs_stream, offs_stream_end)?;
+        self.assert_eq(len_stream, len_stream_end)?;
 
-        let final_len = dst_end - dst;
-        assert_eq!(final_len, lit_stream_end - lit_stream);
+        let final_len = (dst_end - dst)?;
+        self.assert_eq(final_len, (lit_stream_end - lit_stream)?)?;
 
         if mode == 0 {
             core.copy_64_add(dst, lit_stream, dst + last_offset, final_len);
         } else {
             core.memmove(dst, lit_stream, final_len);
         }
+        Ok(())
     }
 }

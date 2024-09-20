@@ -1,73 +1,98 @@
 use crate::algorithm::Algorithm;
 use crate::bit_reader::{BitReader, BitReader2};
-use crate::huffman::{HuffRange, HuffReader, HuffRevLut, BASE_PREFIX};
+use crate::error::End::Idx;
+use crate::error::{ErrorContext, OozError, ResultBuilder, WithContext};
+use crate::huffman::{HuffRange, HuffReader, BASE_PREFIX};
 use crate::pointer::{IntPointer, Pointer, PointerDest};
 use crate::tans::TansDecoder;
 use std::fmt::Debug;
 
-pub struct Core<'a> {
+pub(crate) struct Core<'a> {
     pub input: &'a [u8],
     pub output: &'a mut [u8],
     pub scratch: Vec<u8>,
     pub tmp: Vec<u8>,
+    pub src: Pointer,
+    pub dst: Pointer,
+    pub dst_end: Pointer,
 }
 
 impl Core<'_> {
-    // Decode one 256kb big quantum block. It's divided into two 128k blocks
-    // internally that are compressed separately but with a shared history.
+    pub fn new<'a>(
+        input: &'a [u8],
+        output: &'a mut [u8],
+        offset: usize,
+        out_len: usize,
+    ) -> Core<'a> {
+        Core {
+            input,
+            output,
+            scratch: Vec::new(),
+            tmp: Vec::new(),
+            src: Pointer::input(0),
+            dst: Pointer::output(offset),
+            dst_end: Pointer::output(offset + out_len),
+        }
+    }
+
+    /// Decode one 256kb big quantum block. It's divided into two 128k blocks
+    /// internally that are compressed separately but with a shared history.
     pub fn decode_quantum<T: Algorithm + Debug>(
         &mut self,
-        write_from: usize,
-        write_count: usize,
         algorithm: T,
-    ) -> usize {
+    ) -> Result<usize, OozError> {
         let mut written_bytes = 0;
-        let mut src = Pointer::input(0);
-        let src_in = Pointer::input(0);
         let src_end = Pointer::input(self.input.len());
-        let mut dst = Pointer::output(write_from);
         let dst_start = Pointer::output(0);
-        let dst_end = Pointer::output(write_from + write_count);
         let mut src_used;
 
-        while dst_end > dst {
-            let dst_count = std::cmp::min(dst_end - dst, 0x20000);
-            assert!(src_end - src >= 4, "{:?} {:?}", src_end, src);
-            let chunkhdr = self.get_bytes_as_usize_be(src, 3);
-            log::debug!("index: {}, chunk header: {}", src - src_in, chunkhdr);
+        while self.dst_end > self.dst {
+            let dst_count = std::cmp::min((self.dst_end - self.dst)?, 0x20000);
+            self.assert_le(4, (src_end - self.src)?)?;
+            let chunkhdr = self.get_bytes_as_usize_be(self.src, 3);
+            log::debug!("index: {}, chunk header: {}", self.src.index, chunkhdr);
             if (chunkhdr & 0x800000) == 0 {
                 log::debug!("Stored as entropy without any match copying.");
-                let mut out = dst;
-                src_used = self.decode_bytes(
-                    &mut out,
-                    src,
-                    src_end,
-                    &mut written_bytes,
-                    dst_count,
-                    false,
-                    Pointer::scratch(0),
-                );
-                assert_eq!(written_bytes, dst_count);
+                let mut out = self.dst;
+                src_used = self
+                    .decode_bytes(
+                        &mut out,
+                        self.src,
+                        src_end,
+                        &mut written_bytes,
+                        dst_count,
+                        false,
+                        Pointer::scratch(0),
+                    )
+                    .at(self)?;
+                self.assert_eq(written_bytes, dst_count)?;
             } else {
-                src += 3;
+                self.src += 3;
                 src_used = chunkhdr & 0x7FFFF;
                 let mode = (chunkhdr >> 19) & 0xF;
-                assert!(src_end - src >= src_used, "{} {}", src_end - src, src_used);
+                self.assert_le(src_used, (src_end - self.src)?)?;
                 if src_used < dst_count {
                     log::debug!("processing with {:?}", algorithm);
-                    algorithm.process(self, mode, src, src_used, dst_start, dst, dst_count);
+                    algorithm
+                        .process(
+                            self, mode, self.src, src_used, dst_start, self.dst, dst_count,
+                        )
+                        .at(self)?;
                 } else if src_used > dst_count || mode != 0 {
-                    panic!();
+                    self.raise(format!(
+                        "Bad data. src_used: {}, dst_count: {}, mode: {}",
+                        src_used, dst_count, mode
+                    ))?;
                 } else {
                     log::debug!("copying {} bytes", dst_count);
-                    self.memmove(dst, src, dst_count);
+                    self.memmove(self.dst, self.src, dst_count);
                 }
             }
-            src += src_used;
-            dst += dst_count;
+            self.src += src_used;
+            self.dst += dst_count;
         }
 
-        src - src_in
+        Ok(self.src.index)
     }
 
     /// Unpacks the packed 8 bit offset and lengths into 32 bit.
@@ -84,7 +109,7 @@ impl Core<'_> {
         mut offs_stream: IntPointer,
         len_stream: IntPointer,
         excess_flag: bool,
-    ) {
+    ) -> Result<(), OozError> {
         let mut n;
         let mut u32_len_stream_size = 0usize;
         let offs_stream_org = offs_stream;
@@ -106,7 +131,7 @@ impl Core<'_> {
         bits_b.refill_backwards(self);
 
         if !excess_flag {
-            assert!(bits_b.bits >= 0x2000, "{:X}", bits_b.bits);
+            self.assert_le(0x2000, bits_b.bits)?;
             n = bits_b.leading_zeros();
             bits_b.bitpos += n;
             bits_b.bits <<= n;
@@ -142,7 +167,7 @@ impl Core<'_> {
             while packed_offs_stream != packed_offs_stream_end {
                 cmd = self.get_byte(packed_offs_stream) as i32;
                 packed_offs_stream += 1;
-                assert!((cmd >> 3) <= 26, "{}", cmd >> 3);
+                self.assert_le(cmd >> 3, 26)?;
                 offs =
                     ((8 + (cmd & 7)) << (cmd >> 3)) | bits_a.read_more_than24bits(self, cmd >> 3);
                 self.set_int(offs_stream, 8 - offs);
@@ -152,7 +177,7 @@ impl Core<'_> {
                 }
                 cmd = i32::from(self.get_byte(packed_offs_stream));
                 packed_offs_stream += 1;
-                assert!((cmd >> 3) <= 26, "{}", cmd >> 3);
+                self.assert_le(cmd >> 3, 26)?;
                 offs = ((8 + (cmd & 7)) << (cmd >> 3))
                     | bits_b.read_more_than_24_bits_b(self, cmd >> 3);
                 self.set_int(offs_stream, 8 - offs);
@@ -161,17 +186,19 @@ impl Core<'_> {
             if multi_dist_scale != 1 {
                 self.combine_scaled_offset_arrays(
                     &offs_stream_org,
-                    offs_stream - offs_stream_org,
+                    (offs_stream - offs_stream_org)?,
                     multi_dist_scale,
                     &packed_offs_stream_extra,
-                );
+                )
+                .at(self)?;
             }
         }
         let mut u32_len_stream_buf = [0u32; 512]; // max count is 128kb / 256 = 512
-        assert!(u32_len_stream_size <= 512, "{:?}", u32_len_stream_size);
+        self.assert_le(u32_len_stream_size, 512)?;
 
         let mut u32_len_stream = 0;
-        for (i, dst) in u32_len_stream_buf[..u32_len_stream_size]
+        for (i, dst) in self
+            .slice_mut(&mut u32_len_stream_buf, 0, Idx(u32_len_stream_size))?
             .iter_mut()
             .enumerate()
         {
@@ -185,7 +212,7 @@ impl Core<'_> {
         bits_a.p -= (24 - bits_a.bitpos) >> 3;
         bits_b.p += (24 - bits_b.bitpos) >> 3;
 
-        assert_eq!(bits_a.p, bits_b.p);
+        self.assert_eq(bits_a.p, bits_b.p)?;
 
         for i in 0..packed_litlen_stream_size {
             let mut v = u32::from(self.get_byte(packed_litlen_stream + i));
@@ -195,7 +222,8 @@ impl Core<'_> {
             }
             self.set_int(len_stream + i, (v + 3) as i32);
         }
-        assert_eq!(u32_len_stream, u32_len_stream_size);
+        self.assert_eq(u32_len_stream, u32_len_stream_size)?;
+        Ok(())
     }
 
     fn combine_scaled_offset_arrays(
@@ -204,12 +232,13 @@ impl Core<'_> {
         offs_stream_size: usize,
         scale: i32,
         low_bits: &Pointer,
-    ) {
+    ) -> Result<(), OozError> {
         for i in 0..offs_stream_size {
             let low = self.get_byte(low_bits + i) as i32;
             let scaled = scale * self.get_int(offs_stream + i) - low;
             self.set_int(offs_stream + i, scaled)
         }
+        Ok(())
     }
 
     pub fn decode_bytes(
@@ -221,12 +250,12 @@ impl Core<'_> {
         output_size: usize,
         force_memmove: bool,
         mut scratch: Pointer,
-    ) -> usize {
+    ) -> Result<usize, OozError> {
         let src_org = src;
         let src_size;
         let dst_size;
 
-        assert!(src_end - src >= 2, "too few bytes {}", src_end - src);
+        self.assert_le(2, (src_end - src)?)?;
 
         let chunk_type = (self.get_as_usize(src + 0) >> 4) & 0x7;
         if chunk_type == 0 {
@@ -235,31 +264,27 @@ impl Core<'_> {
                 src_size = ((self.get_as_usize(src + 0) << 8) | self.get_as_usize(src + 1)) & 0xFFF;
                 src += 2;
             } else {
-                assert!(src_end - src >= 3, "too few bytes {}", src_end - src);
+                self.assert_le(3, (src_end - src)?)?;
                 src_size = self.get_bytes_as_usize_be(src, 3);
-                assert_eq!(
-                    src_size & !0x3ffff,
-                    0,
-                    "reserved bits must not be set {:X}",
-                    src_size & !0x3ffff
-                );
+                // reserved bits must not be set
+                self.assert_eq(src_size & !0x3ffff, 0)?;
                 src += 3;
             }
-            assert!(src_size <= output_size, "{} {}", src_size, output_size);
-            assert!(src_size <= src_end - src, "{} {}", src_end - src, src_size);
+            self.assert_le(src_size, output_size)?;
+            self.assert_le(src_size, (src_end - src)?)?;
             *decoded_size = src_size;
             if force_memmove {
                 self.memmove(*output, src, src_size);
             } else {
                 *output = src;
             }
-            return src + src_size - src_org;
+            return Ok((src + src_size - src_org)?);
         }
 
         // In all the other modes, the initial bytes encode
         // the src_size and the dst_size
         if self.get_byte(src) >= 0x80 {
-            assert!(src_end - src >= 3, "too few bytes {}", src_end - src);
+            self.assert_le(3, (src_end - src)?)?;
 
             // short mode, 10 bit sizes
             let bits = self.get_bytes_as_usize_be(src, 3);
@@ -268,15 +293,15 @@ impl Core<'_> {
             src += 3;
         } else {
             // long mode, 18 bit sizes
-            assert!(src_end - src >= 5, "too few bytes {}", src_end - src);
+            self.assert_le(5, (src_end - src)?)?;
             let bits = self.get_bytes_as_usize_be(src + 1, 4);
             src_size = bits & 0x3ffff;
             dst_size = (((bits >> 18) | (self.get_as_usize(src + 0) << 14)) & 0x3FFFF) + 1;
-            assert!(src_size < dst_size, "{} {}", src_size, dst_size);
+            self.assert_lt(src_size, dst_size)?;
             src += 5;
         }
-        assert!(src_size <= src_end - src, "{} {}", src_size, src_end - src);
-        assert!(dst_size <= output_size, "{} {}", dst_size, output_size);
+        self.assert_le(src_size, (src_end - src)?)?;
+        self.assert_le(dst_size, output_size)?;
 
         let dst = *output;
         if dst.into == PointerDest::Scratch {
@@ -288,11 +313,13 @@ impl Core<'_> {
             5 => self.decode_recursive(src, src_size, dst, dst_size, scratch),
             3 => self.decode_rle(src, src_size, dst, dst_size, scratch),
             1 => self.decode_tans(src, src_size, dst, dst_size),
-            _ => panic!("{}", chunk_type),
-        };
-        assert_eq!(src_used, src_size, "chunk type: {}", chunk_type);
+            _ => self.raise(format!("{}", chunk_type))?,
+        }
+        .at(self)?;
+        self.assert_eq(src_used, src_size)
+            .message(|msg| format!("{} for chunk type {}", msg.unwrap_or(""), chunk_type))?;
         *decoded_size = dst_size;
-        src + src_size - src_org
+        Ok((src + src_size - src_org)?)
     }
 
     fn decode_bytes_type12(
@@ -302,7 +329,7 @@ impl Core<'_> {
         output: Pointer,
         output_size: usize,
         chunk_type: usize,
-    ) -> usize {
+    ) -> Result<usize, OozError> {
         let half_output_size;
         let split_left;
         let split_mid;
@@ -322,24 +349,29 @@ impl Core<'_> {
         let mut syms = [0; 1280];
         let num_syms;
         if !bits.read_bit_no_refill() {
-            num_syms = self.huff_read_code_lengths_old(&mut bits, &mut syms, &mut code_prefix);
+            num_syms = self
+                .huff_read_code_lengths_old(&mut bits, &mut syms, &mut code_prefix)
+                .at(self)?;
         } else if !bits.read_bit_no_refill() {
-            num_syms = self.huff_read_code_lengths_new(&mut bits, &mut syms, &mut code_prefix);
+            num_syms = self
+                .huff_read_code_lengths_new(&mut bits, &mut syms, &mut code_prefix)
+                .at(self)?;
         } else {
-            panic!();
+            self.raise("Bad data".into())?;
+            unreachable!()
         }
-        src = bits.p - ((24 - bits.bitpos) / 8);
+        src = (bits.p - ((24 - bits.bitpos) / 8))?;
 
         if num_syms == 1 {
             // no test coverage
             self.memset(output, syms[0], output_size);
-            return src - src_end;
+            return Ok((src - src_end)?);
         }
 
-        let rev_lut = HuffRevLut::make_lut(&code_prefix, &syms);
+        let rev_lut = self.make_lut(&code_prefix, &syms).at(self)?;
 
         if chunk_type == 1 {
-            assert!(src_end - src >= 3, "{}", src_end - src);
+            self.assert_le(3, (src_end - src)?)?;
             split_mid = self.get_bytes_as_usize_le(src, 2);
             src += 2;
             let mut hr = HuffReader {
@@ -351,31 +383,21 @@ impl Core<'_> {
                 src_mid: src + split_mid,
                 ..Default::default()
             };
-            hr.decode_bytes(self, &rev_lut);
+            hr.decode_bytes(self, &rev_lut).at(self)?;
         } else {
-            assert!(src_end - src >= 6, "{}", src_end - src);
+            self.assert_le(6, (src_end - src)?)?;
 
             half_output_size = (output_size + 1) >> 1;
             split_mid = self.get_bytes_as_usize_le(src, 3);
             src += 3;
-            assert!(
-                split_mid <= src_end - src,
-                "{} {}",
-                split_mid,
-                src_end - src
-            );
+            self.assert_le(split_mid, (src_end - src)?)?;
             src_mid = src + split_mid;
             split_left = self.get_bytes_as_usize_le(src, 2);
             src += 2;
-            assert!(
-                split_left + 2 <= src_end - src,
-                "{} {}",
-                split_left + 2,
-                src_end - src
-            );
-            assert!(src_end - src_mid >= 3, "{}", src_end - src_mid);
+            self.assert_le(split_left + 2, (src_end - src)?)?;
+            self.assert_le(3, (src_end - src_mid)?)?;
             split_right = self.get_bytes_as_usize_le(src_mid, 2);
-            assert!(src_end - (src_mid + 2) >= split_right + 2);
+            self.assert_le(split_right + 2, (src_end - (src_mid + 2))?)?;
 
             let mut hr = HuffReader {
                 output,
@@ -386,7 +408,7 @@ impl Core<'_> {
                 src_mid: src + split_left,
                 ..Default::default()
             };
-            hr.decode_bytes(self, &rev_lut);
+            hr.decode_bytes(self, &rev_lut).at(self)?;
 
             let mut hr = HuffReader {
                 output: output + half_output_size,
@@ -397,9 +419,9 @@ impl Core<'_> {
                 src_mid: src_mid + 2 + split_right,
                 ..Default::default()
             };
-            hr.decode_bytes(self, &rev_lut);
+            hr.decode_bytes(self, &rev_lut).at(self)?;
         }
-        src_size
+        Ok(src_size)
     }
 
     fn huff_read_code_lengths_old(
@@ -407,7 +429,7 @@ impl Core<'_> {
         bits: &mut BitReader,
         syms: &mut [u8; 1280],
         code_prefix: &mut [usize; 12],
-    ) -> i32 {
+    ) -> Result<i32, OozError> {
         if bits.read_bit_no_refill() {
             let mut sym = 0;
             let mut num_symbols = 0;
@@ -421,7 +443,7 @@ impl Core<'_> {
                     skip_initial_zeros = false;
                 } else {
                     // Run of zeros
-                    assert_ne!(bits.bits & 0xff000000, 0);
+                    self.assert_ne(bits.bits & 0xff000000, 0)?;
                     sym += bits.read_bits_no_refill(2 * (bits.leading_zeros() + 1)) - 2 + 1;
                     if sym >= 256 {
                         break;
@@ -429,25 +451,22 @@ impl Core<'_> {
                 }
                 bits.refill(self);
                 // Read out the gamma value for the # of symbols
-                assert_ne!(bits.bits & 0xff000000, 0);
+                self.assert_ne(bits.bits & 0xff000000, 0)?;
                 let mut n = bits.read_bits_no_refill(2 * (bits.leading_zeros() + 1)) - 2 + 1;
-                assert!(sym + n <= 256, "Overflow? {} {}", sym, n);
+                // Overflow
+                self.assert_le(sym + n, 256)?;
                 bits.refill(self);
                 num_symbols += n;
                 loop {
-                    assert!(
-                        bits.bits >= thres_for_valid_gamma_bits,
-                        "too big gamma value? {}, {}",
-                        bits.bits,
-                        thres_for_valid_gamma_bits
-                    );
+                    // too big gamma value?
+                    self.assert_le(thres_for_valid_gamma_bits, bits.bits)?;
 
                     let lz = bits.leading_zeros();
                     let v =
                         bits.read_bits_no_refill(lz + forced_bits + 1) + ((lz - 1) << forced_bits);
                     let codelen = (-(v & 1) ^ (v >> 1)) + ((avg_bits_x4 + 2) >> 2);
-                    assert!(codelen >= 1, "{}", codelen);
-                    assert!(codelen <= 11, "{}", codelen);
+                    self.assert_le(1, codelen)?;
+                    self.assert_le(codelen, 11)?;
                     avg_bits_x4 = codelen + ((3 * avg_bits_x4 + 2) >> 2);
                     bits.refill(self);
                     syms[code_prefix[usize::try_from(codelen).unwrap()]] = sym as _;
@@ -459,18 +478,18 @@ impl Core<'_> {
                     }
                 }
             }
-            assert_eq!(sym, 256);
-            assert!(num_symbols >= 2, "{}", num_symbols);
-            num_symbols
+            self.assert_eq(sym, 256)?;
+            self.assert_le(2, num_symbols)?;
+            Ok(num_symbols)
         } else {
             // Sparse symbol encoding
             let num_symbols = bits.read_bits_no_refill(8);
-            assert_ne!(num_symbols, 0);
+            self.assert_ne(num_symbols, 0)?;
             if num_symbols == 1 {
                 syms[0] = bits.read_bits_no_refill(8) as _;
             } else {
                 let codelen_bits = bits.read_bits_no_refill(3);
-                assert!(codelen_bits <= 4, "{}", codelen_bits);
+                self.assert_le(codelen_bits, 4)?;
                 for _ in 0..num_symbols {
                     bits.refill(self);
                     let sym = bits.read_bits_no_refill(8) as u8;
@@ -480,7 +499,7 @@ impl Core<'_> {
                     code_prefix[usize::try_from(codelen).unwrap()] += 1;
                 }
             }
-            num_symbols
+            Ok(num_symbols)
         }
     }
 
@@ -489,7 +508,7 @@ impl Core<'_> {
         bits: &mut BitReader,
         syms: &mut [u8; 1280],
         code_prefix: &mut [usize; 12],
-    ) -> i32 {
+    ) -> Result<i32, OozError> {
         let forced_bits = bits.read_bits_no_refill(2);
 
         let num_symbols = bits.read_bits_no_refill(8) + 1;
@@ -500,15 +519,17 @@ impl Core<'_> {
         let mut br2 = BitReader2 {
             bitpos: ((bits.bitpos - 24) & 7) as u32,
             p_end: bits.p_end,
-            p: bits.p - ((24 - bits.bitpos + 7) >> 3) as u32,
+            p: (bits.p - ((24 - bits.bitpos + 7) >> 3) as u32)?,
         };
 
-        self.decode_golomb_rice_lengths(&mut code_len[..num_symbols as usize + fluff], &mut br2);
+        self.decode_golomb_rice_lengths(&mut code_len[..num_symbols as usize + fluff], &mut br2)
+            .at(self)?;
         self.decode_golomb_rice_bits(
-            &mut code_len[..usize::try_from(num_symbols).unwrap()],
+            &mut code_len[..num_symbols as usize],
             forced_bits as usize,
             &mut br2,
-        );
+        )
+        .at(self)?;
 
         // Reset the bits decoder.
         bits.bitpos = 24;
@@ -523,11 +544,14 @@ impl Core<'_> {
             let mut v = *len as i32;
             v = (!(v & 1) + 1) ^ (v >> 1);
             *len = (v + (running_sum >> 2) + 1) as u8;
-            assert!(*len >= 1 && *len <= 11);
+            self.assert_le(1, *len)?;
+            self.assert_le(*len, 11)?;
             running_sum += v;
         }
 
-        let ranges = self.convert_to_ranges(num_symbols, fluff, &code_len, bits);
+        let ranges = self
+            .convert_to_ranges(num_symbols, fluff, &code_len, bits)
+            .at(self)?;
 
         let mut cp = 0;
         for range in ranges {
@@ -540,10 +564,14 @@ impl Core<'_> {
             cp += range.num as usize;
         }
 
-        num_symbols
+        Ok(num_symbols)
     }
 
-    pub fn decode_golomb_rice_lengths(&self, mut dst: &mut [u8], br: &mut BitReader2) {
+    pub fn decode_golomb_rice_lengths(
+        &mut self,
+        mut dst: &mut [u8],
+        br: &mut BitReader2,
+    ) -> Result<(), OozError> {
         const K_RICE_CODE_BITS2VALUE: [u32; 256] = [
             0x80000000, 0x00000007, 0x10000006, 0x00000006, 0x20000005, 0x00000105, 0x10000005,
             0x00000005, 0x30000004, 0x00000204, 0x10000104, 0x00000104, 0x20000004, 0x00010004,
@@ -598,7 +626,7 @@ impl Core<'_> {
 
         let mut p = br.p;
         let p_end = br.p_end;
-        assert!(p < p_end);
+        self.assert_lt(p, p_end)?;
 
         let mut count = -(br.bitpos as i32);
         let mut v = self.get_as_usize(p) & (255 >> br.bitpos);
@@ -626,19 +654,20 @@ impl Core<'_> {
                 dst = &mut dst[step..];
                 count = x >> 28;
             }
-            assert!(p < p_end);
+            self.assert_lt(p, p_end)?;
             v = self.get_byte(p) as _;
             p += 1;
         }
         // step back if byte not finished
         let mut bitpos = 0;
         if (v & 1) == 0 {
-            assert_ne!(v, 0);
+            self.assert_ne(v, 0)?;
             bitpos = 8 - v.trailing_zeros();
             p -= 1;
         }
         br.p = p;
         br.bitpos = bitpos;
+        Ok(())
     }
 
     fn decode_golomb_rice_bits(
@@ -646,18 +675,16 @@ impl Core<'_> {
         mut dst: &mut [u8],
         bitcount: usize,
         br: &mut BitReader2,
-    ) -> bool {
+    ) -> Result<(), OozError> {
         if bitcount == 0 {
-            return true;
+            return Ok(());
         }
         let mut p = br.p;
         let bitpos = br.bitpos;
 
         let bits_required = bitpos as usize + bitcount * dst.len();
         let bytes_required = (bits_required + 7) >> 3;
-        if bytes_required > br.p_end - p {
-            return false;
-        }
+        self.assert_lt(bytes_required, (br.p_end - p)?)?;
 
         br.p = p + (bits_required >> 3);
         br.bitpos = (bits_required & 7) as u32;
@@ -697,25 +724,25 @@ impl Core<'_> {
                     bits = (bits | (bits << 5)) & 0x0707070707070707;
                     bits
                 }
-                _ => panic!(),
+                _ => self.raise(format!("Unexpected bitcount {}", bitcount))?,
             };
+            let mut bytes = [0; 8];
             let len = dst.len().min(8);
-            let mut bytes = dst[..len].to_vec();
-            bytes.resize(8, 0);
-            let v = (u64::from_le_bytes(bytes.try_into().unwrap()) << bitcount) + bits.swap_bytes();
+            bytes[..len].copy_from_slice(&dst[..len]);
+            let v = (u64::from_le_bytes(bytes) << bitcount) + bits.swap_bytes();
             dst[..len].copy_from_slice(&v.to_le_bytes()[..len]);
             dst = &mut dst[len..];
         }
-        true
+        Ok(())
     }
 
     pub fn convert_to_ranges(
-        &self,
+        &mut self,
         num_symbols: i32,
         p: usize,
         syms: &[u8],
         bits: &mut BitReader,
-    ) -> Vec<HuffRange> {
+    ) -> Result<Vec<HuffRange>, OozError> {
         let mut sym_idx = 0;
         let mut symlen = num_symbols as usize;
 
@@ -724,7 +751,7 @@ impl Core<'_> {
             bits.refill(self);
             let v = syms[symlen] as i32;
             symlen += 1;
-            assert!(v < 8);
+            self.assert_lt(v, 8)?;
             sym_idx = bits.read_bits_no_refill(v + 1) + (1 << (v + 1)) - 1;
         }
 
@@ -736,11 +763,11 @@ impl Core<'_> {
             bits.refill(self);
             let v = syms[symlen] as i32;
             symlen += 1;
-            assert!(v < 9);
+            self.assert_lt(v, 9)?;
             let num = bits.read_bits_no_refill_zero(v) + (1 << v);
             let v = syms[symlen] as i32;
             symlen += 1;
-            assert!(v < 8);
+            self.assert_lt(v, 8)?;
             let space = bits.read_bits_no_refill(v + 1) + (1 << (v + 1)) - 1;
             ranges.push(HuffRange {
                 symbol: sym_idx as u16,
@@ -750,16 +777,16 @@ impl Core<'_> {
             sym_idx += num + space;
         }
 
-        assert!(sym_idx < 256);
-        assert!(syms_used < num_symbols);
-        assert!(sym_idx + num_symbols - syms_used <= 256);
+        self.assert_lt(sym_idx, 256)?;
+        self.assert_lt(syms_used, num_symbols)?;
+        self.assert_le(sym_idx + num_symbols - syms_used, 256)?;
 
         ranges.push(HuffRange {
             symbol: sym_idx as u16,
             num: (num_symbols - syms_used) as u16,
         });
 
-        ranges
+        Ok(ranges)
     }
 
     fn decode_recursive(
@@ -769,53 +796,57 @@ impl Core<'_> {
         mut output: Pointer,
         output_size: usize,
         scratch: Pointer,
-    ) -> usize {
+    ) -> Result<usize, OozError> {
         let mut src = src_org;
         let output_end = output + output_size;
         let src_end = src + src_size;
 
-        assert!(src_size >= 6);
+        self.assert_le(6, src_size)?;
 
         let byte = self.get_as_usize(src);
         let n = byte & 0x7f;
-        assert!(n >= 2);
+        self.assert_le(2, n)?;
 
         if (byte & 0x80) == 0 {
             src += 1;
             for _ in 0..n {
                 let mut decoded_size = 0;
-                let output_size = output_end - output;
-                let dec = self.decode_bytes(
-                    &mut output,
-                    src,
-                    src_end,
-                    &mut decoded_size,
-                    output_size,
-                    true,
-                    scratch,
-                );
+                let output_size = (output_end - output)?;
+                let dec = self
+                    .decode_bytes(
+                        &mut output,
+                        src,
+                        src_end,
+                        &mut decoded_size,
+                        output_size,
+                        true,
+                        scratch,
+                    )
+                    .at(self)?;
                 output += decoded_size;
                 src += dec;
             }
-            assert_eq!(output, output_end);
-            src - src_org
+            self.assert_eq(output, output_end)?;
+            Ok((src - src_org)?)
         } else {
             let mut decoded_size = 0;
-            let dec = self.decode_multi_array(
-                src,
-                src_end,
-                output,
-                output_end,
-                &mut Vec::new(),
-                &mut Vec::new(),
-                1,
-                &mut decoded_size,
-                true,
-                scratch,
-            );
+            let dec = self
+                .decode_multi_array(
+                    src,
+                    src_end,
+                    output,
+                    output_end,
+                    &mut Vec::new(),
+                    &mut Vec::new(),
+                    1,
+                    &mut decoded_size,
+                    true,
+                    scratch,
+                )
+                .at(self)?;
             output += decoded_size;
-            assert_eq!(output, output_end);
-            dec
+            self.assert_eq(output, output_end)?;
+            Ok(dec)
         }
     }
 
@@ -831,15 +862,15 @@ impl Core<'_> {
         total_size_out: &mut usize,
         force_memmove: bool,
         scratch: Pointer,
-    ) -> usize {
+    ) -> Result<usize, OozError> {
         let mut src = src_org;
 
-        assert!(src_end - src >= 4, "{}", src_end - src);
+        self.assert_le(4, (src_end - src)?)?;
 
         let mut decoded_size = 0;
         let mut num_arrays_in_file = self.get_as_usize(src);
         src += 1;
-        assert_ne!(num_arrays_in_file & 0x80, 0);
+        self.assert_ne(num_arrays_in_file & 0x80, 0)?;
         num_arrays_in_file &= 0x3f;
 
         let mut total_size = 0;
@@ -847,15 +878,17 @@ impl Core<'_> {
         if num_arrays_in_file == 0 {
             for _ in 0..array_count {
                 let mut chunk_dst = dst;
-                let dec = self.decode_bytes(
-                    &mut chunk_dst,
-                    src,
-                    src_end,
-                    &mut decoded_size,
-                    dst_end - dst,
-                    force_memmove,
-                    scratch,
-                );
+                let dec = self
+                    .decode_bytes(
+                        &mut chunk_dst,
+                        src,
+                        src_end,
+                        &mut decoded_size,
+                        (dst_end - dst)?,
+                        force_memmove,
+                        scratch,
+                    )
+                    .at(self)?;
                 dst += decoded_size;
                 array_data.push(chunk_dst);
                 array_lens.push(decoded_size);
@@ -863,7 +896,7 @@ impl Core<'_> {
                 total_size += decoded_size;
             }
             *total_size_out = total_size;
-            return src - src_org; // not supported yet
+            return Ok((src - src_org)?);
         }
 
         let mut entropy_array_data = [Default::default(); 63];
@@ -874,15 +907,17 @@ impl Core<'_> {
 
         for i in 0..num_arrays_in_file {
             let mut chunk_dst = scratch_cur;
-            let dec = self.decode_bytes(
-                &mut chunk_dst,
-                src,
-                src_end,
-                &mut decoded_size,
-                usize::MAX,
-                force_memmove,
-                scratch_cur,
-            );
+            let dec = self
+                .decode_bytes(
+                    &mut chunk_dst,
+                    src,
+                    src_end,
+                    &mut decoded_size,
+                    usize::MAX,
+                    force_memmove,
+                    scratch_cur,
+                )
+                .at(self)?;
             entropy_array_data[i] = chunk_dst;
             entropy_array_size[i] = decoded_size;
             scratch_cur += decoded_size;
@@ -891,15 +926,15 @@ impl Core<'_> {
         }
         *total_size_out = total_size;
 
-        assert!(src_end - src >= 3, "{}", src_end - src);
+        self.assert_le(3, (src_end - src)?)?;
 
         let q = self.get_bytes_as_usize_le(src, 2);
         src += 2;
 
-        let num_indexes = self.get_block_size(src, src_end, total_size).unwrap();
+        let num_indexes = self.get_block_size(src, src_end, total_size).at(self)?;
 
         let mut num_lens = num_indexes - array_count;
-        assert_ne!(num_lens, 0);
+        self.assert_ne(num_lens, 0)?;
 
         let mut interval_lenlog2 = scratch_cur;
         scratch_cur += num_indexes;
@@ -909,16 +944,18 @@ impl Core<'_> {
 
         if (q & 0x8000) != 0 {
             let mut size_out = 0;
-            let n = self.decode_bytes(
-                &mut interval_indexes,
-                src,
-                src_end,
-                &mut size_out,
-                num_indexes,
-                true,
-                scratch_cur,
-            );
-            assert_eq!(size_out, num_indexes);
+            let n = self
+                .decode_bytes(
+                    &mut interval_indexes,
+                    src,
+                    src_end,
+                    &mut size_out,
+                    num_indexes,
+                    true,
+                    scratch_cur,
+                )
+                .at(self)?;
+            self.assert_eq(size_out, num_indexes)?;
             src += n;
 
             for i in 0..num_indexes {
@@ -932,49 +969,43 @@ impl Core<'_> {
             let lenlog2_chunksize = num_indexes - array_count;
 
             let mut size_out = 0;
-            let n = self.decode_bytes(
-                &mut interval_indexes,
-                src,
-                src_end,
-                &mut size_out,
-                num_indexes,
-                false,
-                scratch_cur,
-            );
-            assert_eq!(size_out, num_indexes);
+            let n = self
+                .decode_bytes(
+                    &mut interval_indexes,
+                    src,
+                    src_end,
+                    &mut size_out,
+                    num_indexes,
+                    false,
+                    scratch_cur,
+                )
+                .at(self)?;
+            self.assert_eq(size_out, num_indexes)?;
             src += n;
 
-            let n = self.decode_bytes(
-                &mut interval_lenlog2,
-                src,
-                src_end,
-                &mut size_out,
-                lenlog2_chunksize,
-                false,
-                scratch_cur,
-            );
-            assert_eq!(size_out, lenlog2_chunksize);
+            let n = self
+                .decode_bytes(
+                    &mut interval_lenlog2,
+                    src,
+                    src_end,
+                    &mut size_out,
+                    lenlog2_chunksize,
+                    false,
+                    scratch_cur,
+                )
+                .at(self)?;
+            self.assert_eq(size_out, lenlog2_chunksize)?;
             src += n;
 
             for i in 0..lenlog2_chunksize {
-                assert!(
-                    self.get_byte(interval_lenlog2 + i) <= 16,
-                    "{} {}",
-                    i,
-                    self.get_byte(interval_lenlog2 + i)
-                );
+                self.assert_le(self.get_byte(interval_lenlog2 + i), 16)?;
             }
         }
 
         let mut decoded_intervals = Vec::with_capacity(num_lens);
 
         let varbits_complen = q & 0x3FFF;
-        assert!(
-            src_end - src >= varbits_complen,
-            "{} {}",
-            src_end - src,
-            varbits_complen
-        );
+        self.assert_le(varbits_complen, (src_end - src)?)?;
 
         let mut f = src;
         let mut bits_f = 0u32;
@@ -997,7 +1028,7 @@ impl Core<'_> {
             bits_f |= self.get_bytes_as_usize_be(f, 4) as u32 >> (24 - bitpos_f);
             f += (bitpos_f + 7) >> 3;
 
-            bits_b |= self.get_bytes_as_usize_le(b - 4, 4) as u32 >> (24 - bitpos_b);
+            bits_b |= self.get_bytes_as_usize_le((b - 4)?, 4) as u32 >> (24 - bitpos_b);
             b -= (bitpos_b + 7) >> 3;
 
             let numbits_f = self.get_byte(interval_lenlog2 + i + 0) as i32;
@@ -1022,13 +1053,16 @@ impl Core<'_> {
         // read final one since above loop reads 2
         if (num_lens & 1) == 1 {
             bits_f |= self.get_bytes_as_usize_be(f, 4) as u32 >> (24 - bitpos_f);
-            let numbits_f = self.get_byte(interval_lenlog2 + num_lens - 1);
+            let numbits_f = self.get_byte((interval_lenlog2 + num_lens - 1)?);
             bits_f = (bits_f | 1).rotate_left(numbits_f as _);
             let value_f = bits_f & BITMASKS[numbits_f as usize];
             decoded_intervals.push(value_f);
         }
 
-        assert!(!self.get_as_bool(interval_indexes + num_indexes - 1));
+        self.assert(
+            !self.get_as_bool((interval_indexes + num_indexes - 1)?),
+            "Bad data",
+        )?;
 
         let mut indi = 0;
         let mut leni = 0;
@@ -1037,7 +1071,7 @@ impl Core<'_> {
         for arri in 0..array_count {
             array_data.push(dst);
 
-            assert!(indi < num_indexes, "{} {}", indi, num_indexes);
+            self.assert_lt(indi, num_indexes)?;
 
             loop {
                 let source = self.get_as_usize(interval_indexes + indi);
@@ -1045,18 +1079,13 @@ impl Core<'_> {
                 if source == 0 {
                     break;
                 }
-                assert!(
-                    source <= num_arrays_in_file,
-                    "{} {}",
-                    source,
-                    num_arrays_in_file
-                );
-                assert!(leni < num_lens, "{} {}", leni, num_lens);
+                self.assert_le(source, num_arrays_in_file)?;
+                self.assert_lt(leni, num_lens)?;
                 let cur_len = decoded_intervals[leni] as usize;
                 leni += 1;
                 let bytes_left = entropy_array_size[source - 1];
-                assert!(cur_len <= bytes_left, "{} {}", cur_len, bytes_left);
-                assert!(cur_len <= dst_end - dst, "{} {}", cur_len, dst_end - dst);
+                self.assert_le(cur_len, bytes_left)?;
+                self.assert_le(cur_len, (dst_end - dst)?)?;
                 let blksrc = entropy_array_data[source - 1];
                 entropy_array_size[source - 1] -= cur_len;
                 entropy_array_data[source - 1] += cur_len;
@@ -1066,17 +1095,17 @@ impl Core<'_> {
             if increment_leni {
                 leni += 1;
             }
-            array_lens.push(dst - array_data[arri]);
+            array_lens.push((dst - array_data[arri])?);
         }
 
-        assert_eq!(indi, num_indexes);
-        assert_eq!(leni, num_lens);
+        self.assert_eq(indi, num_indexes)?;
+        self.assert_eq(leni, num_lens)?;
 
         for &i in entropy_array_size[..num_arrays_in_file].iter() {
-            assert_eq!(i, 0);
+            self.assert_eq(i, 0)?
         }
 
-        src_end_actual - src_org
+        Ok((src_end_actual - src_org)?)
     }
 
     fn get_block_size(
@@ -1084,14 +1113,10 @@ impl Core<'_> {
         src_org: Pointer,
         src_end: Pointer,
         dest_capacity: usize,
-    ) -> Option<usize> {
+    ) -> Result<usize, OozError> {
         let mut src = src_org;
         let src_size;
         let dst_size;
-
-        if src_end - src < 2 {
-            return None;
-        } // too few bytes
 
         let chunk_type = (self.get_byte(src) >> 4) & 0x7;
         if chunk_type == 0 {
@@ -1100,32 +1125,20 @@ impl Core<'_> {
                 src_size = self.get_bytes_as_usize_be(src, 2) & 0xFFF;
                 src += 2;
             } else {
-                if src_end - src < 3 {
-                    return None;
-                } // too few bytes
                 src_size = self.get_bytes_as_usize_be(src, 3);
-                if (src_size & !0x3ffff) != 0 {
-                    return None;
-                } // reserved bits must not be set
+                self.assert_eq(src_size & !0x3ffff, 0)?; // reserved bits must not be set
                 src += 3;
             }
-            if src_size > dest_capacity || src_end - src < src_size {
-                return None;
-            }
-            return Some(src_size);
+            self.assert_le(src_size, dest_capacity)?;
+            self.assert_le(src_size, (src_end - src)?)?;
+            return Ok(src_size);
         }
 
-        if chunk_type >= 6 {
-            return None;
-        }
+        self.assert_lt(chunk_type, 6)?;
 
         // In all the other modes, the initial bytes encode
         // the src_size and the dst_size
         if self.get_byte(src) >= 0x80 {
-            if src_end - src < 3 {
-                return None;
-            } // too few bytes
-
             // short mode, 10 bit sizes
             let bits = self.get_bytes_as_usize_be(src, 3);
             src_size = bits & 0x3ff;
@@ -1134,21 +1147,15 @@ impl Core<'_> {
         } else {
             // long mode, 18 bit sizes
             // no test coverage
-            if src_end - src < 5 {
-                return None;
-            } // too few bytes
             let bits = self.get_bytes_as_usize_be(src, 5);
             src_size = bits & 0x3ffff;
             dst_size = (((bits >> 18) | (self.get_as_usize(src) << 14)) & 0x3FFFF) + 1;
-            if src_size >= dst_size {
-                return None;
-            }
+            self.assert_lt(dst_size, src_size)?;
             src += 5;
         }
-        if src_end - src < src_size || dst_size > dest_capacity {
-            return None;
-        }
-        Some(dst_size)
+        self.assert_le(src_size, (src_end - src)?)?;
+        self.assert_le(dst_size, dest_capacity)?;
+        Ok(dst_size)
     }
 
     fn decode_rle(
@@ -1158,11 +1165,11 @@ impl Core<'_> {
         mut dst: Pointer,
         dst_size: usize,
         scratch: Pointer,
-    ) -> usize {
-        assert_ne!(src_size, 0);
+    ) -> Result<usize, OozError> {
+        self.assert_ne(src_size, 0)?;
         if src_size == 1 {
             self.memset(dst, self.get_byte(src), dst_size);
-            return 1;
+            return Ok(1);
         }
         let dst_end = dst + dst_size;
         let mut cmd_ptr = src + 1;
@@ -1171,16 +1178,18 @@ impl Core<'_> {
         if self.get_as_bool(src) {
             let mut dst_ptr = scratch;
             let mut dec_size = 0;
-            let n = self.decode_bytes(
-                &mut dst_ptr,
-                src,
-                src + src_size,
-                &mut dec_size,
-                usize::MAX,
-                true,
-                scratch,
-            );
-            assert!(n > 0, "{}", n);
+            let n = self
+                .decode_bytes(
+                    &mut dst_ptr,
+                    src,
+                    src + src_size,
+                    &mut dec_size,
+                    usize::MAX,
+                    true,
+                    scratch,
+                )
+                .at(self)?;
+            self.assert_lt(0, n)?;
             let cmd_len = src_size - n + dec_size;
             self.memcpy(dst_ptr + dec_size, src + n, src_size - n);
             cmd_ptr = dst_ptr;
@@ -1190,13 +1199,13 @@ impl Core<'_> {
         let mut rle_byte = 0;
 
         while cmd_ptr < cmd_ptr_end {
-            let cmd = self.get_as_usize(cmd_ptr_end - 1);
+            let cmd = self.get_as_usize((cmd_ptr_end - 1)?);
             if cmd == 0 || cmd > 0x2f {
                 cmd_ptr_end -= 1;
                 let bytes_to_copy = !cmd & 0xF;
                 let bytes_to_rle = cmd >> 4;
-                assert!(bytes_to_copy + bytes_to_rle <= dst_end - dst);
-                assert!(bytes_to_copy <= cmd_ptr_end - cmd_ptr);
+                self.assert_le(bytes_to_copy + bytes_to_rle, (dst_end - dst)?)?;
+                self.assert_le(bytes_to_copy, (cmd_ptr_end - cmd_ptr)?)?;
                 self.memcpy(dst, cmd_ptr, bytes_to_copy);
                 cmd_ptr += bytes_to_copy;
                 dst += bytes_to_copy;
@@ -1207,8 +1216,8 @@ impl Core<'_> {
                 let data = self.get_bytes_as_usize_le(cmd_ptr_end, 2) - 4096;
                 let bytes_to_copy = data & 0x3F;
                 let bytes_to_rle = data >> 6;
-                assert!(bytes_to_copy + bytes_to_rle <= dst_end - dst);
-                assert!(bytes_to_copy <= cmd_ptr_end - cmd_ptr);
+                self.assert_le(bytes_to_copy + bytes_to_rle, (dst_end - dst)?)?;
+                self.assert_le(bytes_to_copy, (cmd_ptr_end - cmd_ptr)?)?;
                 self.memcpy(dst, cmd_ptr, bytes_to_copy);
                 cmd_ptr += bytes_to_copy;
                 dst += bytes_to_copy;
@@ -1221,34 +1230,24 @@ impl Core<'_> {
             } else if cmd >= 9 {
                 cmd_ptr_end -= 2;
                 let bytes_to_rle = (self.get_bytes_as_usize_le(cmd_ptr_end, 2) - 0x8ff) * 128;
-                assert!(bytes_to_rle <= dst_end - dst);
+                self.assert_le(bytes_to_rle, (dst_end - dst)?)?;
                 self.memset(dst, rle_byte, bytes_to_rle);
                 dst += bytes_to_rle;
             } else {
                 cmd_ptr_end -= 2;
                 let bytes_to_copy = (self.get_bytes_as_usize_le(cmd_ptr_end, 2) - 511) * 64;
-                assert!(
-                    bytes_to_copy <= cmd_ptr_end - cmd_ptr,
-                    "{} {}",
-                    bytes_to_copy,
-                    cmd_ptr_end - cmd_ptr
-                );
-                assert!(
-                    bytes_to_copy <= dst_end - dst,
-                    "{} {}",
-                    bytes_to_copy,
-                    dst_end - dst
-                );
+                self.assert_le(bytes_to_copy, (cmd_ptr_end - cmd_ptr)?)?;
+                self.assert_le(bytes_to_copy, (dst_end - dst)?)?;
                 self.memcpy(dst, cmd_ptr, bytes_to_copy);
                 dst += bytes_to_copy;
                 cmd_ptr += bytes_to_copy;
             }
         }
 
-        assert_eq!(cmd_ptr, cmd_ptr_end);
-        assert_eq!(dst, dst_end);
+        self.assert_eq(cmd_ptr, cmd_ptr_end)?;
+        self.assert_eq(dst, dst_end)?;
 
-        src_size
+        Ok(src_size)
     }
 
     fn decode_tans(
@@ -1257,9 +1256,9 @@ impl Core<'_> {
         src_size: usize,
         dst: Pointer,
         dst_size: usize,
-    ) -> usize {
-        assert!(src_size >= 8);
-        assert!(dst_size >= 5);
+    ) -> Result<usize, OozError> {
+        self.assert_le(8, src_size)?;
+        self.assert_le(5, dst_size)?;
 
         let mut src_end = src + src_size;
 
@@ -1271,19 +1270,19 @@ impl Core<'_> {
         };
         br.refill(self);
 
-        assert!(!br.read_bit_no_refill(), "reserved bit");
+        self.assert(!br.read_bit_no_refill(), "reserved bit")?;
 
         let l_bits = br.read_bits_no_refill(2) + 8;
 
-        let tans_data = TansDecoder::decode_table(self, &mut br, l_bits);
+        let tans_data = TansDecoder::decode_table(self, &mut br, l_bits).at(self)?;
 
-        src = br.p - (24 - br.bitpos) / 8;
+        src = (br.p - (24 - br.bitpos) / 8)?;
 
-        assert!(src < src_end);
+        self.assert_lt(src, src_end)?;
 
         let mut decoder = TansDecoder::default();
         decoder.dst = dst;
-        decoder.dst_end = dst + dst_size - 5;
+        decoder.dst_end = (dst + dst_size - 5)?;
 
         decoder.lut = decoder.init_lut(&tans_data, l_bits);
 
@@ -1323,15 +1322,24 @@ impl Core<'_> {
         bitpos_f -= l_bits;
 
         decoder.bits_f = bits_f;
-        decoder.ptr_f = src - (bitpos_f >> 3);
+        decoder.ptr_f = (src - (bitpos_f >> 3))?;
         decoder.bitpos_f = (bitpos_f & 7) as _;
 
         decoder.bits_b = bits_b;
         decoder.ptr_b = src_end + (bitpos_b >> 3);
         decoder.bitpos_b = (bitpos_b & 7) as _;
 
-        decoder.decode(self);
+        decoder.decode(self).at(self)?;
 
-        src_size
+        Ok(src_size)
+    }
+}
+
+impl ErrorContext for Core<'_> {
+    fn describe(&mut self) -> Option<String> {
+        Some(format!(
+            "Source index: {}, destination index: {}",
+            self.src.index, self.dst.index
+        ))
     }
 }

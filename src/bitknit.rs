@@ -1,3 +1,4 @@
+use crate::error::OozError;
 use std::mem::size_of;
 
 #[derive(Copy, Clone)]
@@ -213,12 +214,12 @@ impl<'a> Core<'a> {
         std::mem::swap(&mut self.bits, &mut self.bits2);
     }
 
-    pub(crate) fn decode(&mut self) -> usize {
+    pub(crate) fn decode(&mut self) -> Result<usize, OozError> {
         let mut recent_mask = self.state.recent_dist_mask as usize;
 
         let v = self.read_4();
         if v < 0x10000 {
-            return 0;
+            return Ok(0);
         }
 
         let mut a = v >> 4;
@@ -318,6 +319,6 @@ impl<'a> Core<'a> {
         self.write_2(self.bits2 as u16);
 
         self.state.recent_dist_mask = recent_mask as u32;
-        self.src
+        Ok(self.src)
     }
 }
