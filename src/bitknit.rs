@@ -1,5 +1,4 @@
-use crate::error::OozError;
-use std::mem::size_of;
+use crate::error::{ErrorBuilder, ErrorContext, OozError, ResultBuilder, WithContext};
 
 #[derive(Copy, Clone)]
 struct Base<const F: usize, const A: usize, const L: usize> {
@@ -9,29 +8,46 @@ struct Base<const F: usize, const A: usize, const L: usize> {
     lookup: [u16; L],
 }
 
-type Literal = Base<300, 301, 516>;
+impl<const F: usize, const A: usize, const L: usize> ErrorContext for Base<F, A, L> {
+    fn describe(&mut self) -> Option<String> {
+        Some(
+            match F {
+                300 => "Literal",
+                40 => "DistanceLsb",
+                21 => "DistanceBits",
+                _ => unreachable!(),
+            }
+            .into(),
+        )
+    }
+}
 
-type DistanceLsb = Base<40, 41, 68>;
+type Literal = Base<300, 301, 512>;
 
-type DistanceBits = Base<21, 22, 68>;
+type DistanceLsb = Base<40, 41, 64>;
+
+type DistanceBits = Base<21, 22, 64>;
 
 impl<const F: usize, const A: usize, const L: usize> Base<F, A, L> {
     const SHIFT: u16 = if A == 301 { 6 } else { 9 };
     const F_INC: u16 = 1026 - A as u16;
 
-    fn fill_lut(&mut self) {
+    fn fill_lut(&mut self) -> Result<(), OozError> {
         let mut p = 0;
         for (v, i) in self.a[1..].iter().zip(0u16..) {
-            let p_end = ((v - 1) >> Self::SHIFT) + 1;
-            for j in (p as usize..=p_end as usize).step_by(4) {
-                self.lookup[j..][..4].fill(i);
-            }
+            let p_end = (((v - 1) >> Self::SHIFT) + 1) as usize;
+            self.lookup
+                .get_mut(p..p_end)
+                .message(|_| format!("{}..{} can't index [{}]", p, p_end, L))?
+                .fill(i);
             p = p_end;
         }
+        Ok(())
     }
 
-    fn adapt(&mut self, sym: usize) {
+    fn adapt(&mut self, sym: usize) -> Result<(), OozError> {
         self.adapt_interval = 1024;
+        self.assert_lt(sym, F)?;
         self.freq[sym] += Self::F_INC;
 
         let mut sum = 0;
@@ -41,27 +57,33 @@ impl<const F: usize, const A: usize, const L: usize> Base<F, A, L> {
         }
         self.freq.fill(1);
 
-        self.fill_lut();
+        self.fill_lut().at(self)?;
+        Ok(())
     }
 
-    fn lookup(&mut self, bits: &mut u32) -> usize {
-        let masked = (*bits & 0x7FFF) as usize;
-        let mut sym = self.lookup[masked >> Self::SHIFT] as usize;
-        if masked > self.a[sym + 1] as usize {
+    fn lookup(&mut self, bits: &mut u32) -> Result<usize, OozError> {
+        let masked = (*bits & 0x7FFF) as u16;
+        let i = (masked >> Self::SHIFT) as usize;
+        self.assert_lt(i, L)?;
+        let mut sym = self.lookup[i] as usize;
+        self.assert_lt(sym + 1, A)?;
+        if masked > self.a[sym + 1] {
             sym += 1;
+            self.assert_lt(sym + 1, A)?;
         }
-        while masked >= self.a[sym + 1] as usize {
-            sym += 1;
-        }
+        sym += self.a[sym + 1..]
+            .iter()
+            .position(|&v| v > masked)
+            .ok_or_else(ErrorBuilder::default)?;
         let s = self.a[sym] as u32;
         let s1 = self.a[sym + 1] as u32;
         *bits = masked as u32 + (*bits >> 15) * (s1 - s) - s;
         self.freq[sym] += 31;
         self.adapt_interval -= 1;
         if self.adapt_interval == 0 {
-            self.adapt(sym);
+            self.adapt(sym).at(self)?;
         }
-        sym
+        Ok(sym)
     }
 }
 
@@ -86,7 +108,7 @@ impl<const F: usize, const A: usize, const L: usize> Default for Base<F, A, L> {
             lookup: [0; L],
         };
 
-        s.fill_lut();
+        s.fill_lut().unwrap();
         s
     }
 }
@@ -132,6 +154,8 @@ pub(crate) struct Core<'a> {
     distancelsb: [usize; 4],
 }
 
+impl ErrorContext for Core<'_> {}
+
 impl<'a> Core<'a> {
     pub(crate) fn new(
         input: &'a [u8],
@@ -152,34 +176,63 @@ impl<'a> Core<'a> {
         }
     }
 
-    fn read_2(&mut self) -> u32 {
-        let v = u16::from_le_bytes(*self.input[self.src..].first_chunk().unwrap());
-        self.src += size_of::<u16>();
-        v as u32
+    fn read<const N: usize>(&self) -> Result<&[u8; N], ErrorBuilder> {
+        self.input
+            .get(self.src..)
+            .and_then(|s| s.first_chunk())
+            .message(|_| {
+                format!(
+                    "Can't read {} bytes from [{}] at {}",
+                    N,
+                    self.input.len(),
+                    self.src
+                )
+            })
     }
 
-    fn read_4(&mut self) -> u32 {
-        let v = u32::from_le_bytes(*self.input[self.src..].first_chunk().unwrap());
-        self.src += size_of::<u32>();
-        v
+    fn read_2(&mut self) -> Result<u32, OozError> {
+        let v = u16::from_le_bytes(*self.read()?);
+        self.src += 2;
+        Ok(v as u32)
     }
 
-    fn write_1(&mut self, v: u8) {
+    fn read_4(&mut self) -> Result<u32, OozError> {
+        let v = u32::from_le_bytes(*self.read()?);
+        self.src += 4;
+        Ok(v)
+    }
+
+    fn write_1(&mut self, v: u8) -> Result<(), OozError> {
+        self.assert_lt(self.dst, self.output.len())?;
         self.output[self.dst] = v;
         self.dst += 1;
+        Ok(())
     }
 
-    fn write_2(&mut self, v: u16) {
-        self.output[self.dst..][..2].copy_from_slice(&v.to_le_bytes());
+    fn write_2(&mut self, v: u16) -> Result<(), OozError> {
+        let i = self.dst;
+        self.output
+            .get_mut(i..i + 2)
+            .message(|_| format!("{} out of bounds", i))?
+            .copy_from_slice(&v.to_le_bytes());
         self.dst += 2;
+        Ok(())
     }
 
-    fn write_sym(&mut self, sym: u8) {
+    fn write_sym(&mut self, sym: u8) -> Result<(), OozError> {
+        self.assert_lt(self.dst, self.output.len())?;
         self.output[self.dst] = sym.wrapping_add(self.last_match());
         self.dst += 1;
+        Ok(())
     }
 
-    fn copy_chunks<const CHUNK_SIZE: usize>(&mut self, copy_length: usize, match_dist: usize) {
+    fn copy_chunks<const CHUNK_SIZE: usize>(
+        &mut self,
+        copy_length: usize,
+        match_dist: usize,
+    ) -> Result<(), OozError> {
+        self.assert_le(match_dist, self.dst)?;
+        self.assert_le(self.dst + copy_length, self.output.len())?;
         for i in 0..copy_length / CHUNK_SIZE {
             let dst = self.dst + i * CHUNK_SIZE;
             let src = dst - match_dist;
@@ -189,35 +242,37 @@ impl<'a> Core<'a> {
         let dst = self.dst + copy_length - rem;
         let src = dst - match_dist;
         self.output.copy_within(src..src + rem, dst);
+        Ok(())
     }
 
     fn last_match(&self) -> u8 {
         self.output[self.dst - self.state.last_match_dist as usize]
     }
 
-    fn lookup_literal(&mut self) -> usize {
+    fn lookup_literal(&mut self) -> Result<usize, OozError> {
         self.state.literals[self.litmodel[self.dst & 3]].lookup(&mut self.bits)
     }
 
-    fn lookup_lsb(&mut self) -> usize {
+    fn lookup_lsb(&mut self) -> Result<usize, OozError> {
         self.state.distance_lsb[self.distancelsb[self.dst & 3]].lookup(&mut self.bits)
     }
 
-    fn lookup_bits(&mut self) -> usize {
+    fn lookup_bits(&mut self) -> Result<usize, OozError> {
         self.state.distance_bits.lookup(&mut self.bits)
     }
 
-    fn renormalize(&mut self) {
+    fn renormalize(&mut self) -> Result<(), OozError> {
         if self.bits < 0x10000 {
-            self.bits = (self.bits << 16) | self.read_2();
+            self.bits = (self.bits << 16) | self.read_2().at(self)?;
         }
         std::mem::swap(&mut self.bits, &mut self.bits2);
+        Ok(())
     }
 
     pub(crate) fn decode(&mut self) -> Result<usize, OozError> {
         let mut recent_mask = self.state.recent_dist_mask as usize;
 
-        let v = self.read_4();
+        let v = self.read_4().at(self)?;
         if v < 0x10000 {
             return Ok(0);
         }
@@ -225,38 +280,38 @@ impl<'a> Core<'a> {
         let mut a = v >> 4;
         let n = v & 0xF;
         if a < 0x10000 {
-            a = (a << 16) | self.read_2();
+            a = (a << 16) | self.read_2().at(self)?;
         }
         self.bits = a >> n;
         if self.bits < 0x10000 {
-            self.bits = (self.bits << 16) | self.read_2();
+            self.bits = (self.bits << 16) | self.read_2().at(self)?;
         }
-        a = (a << 16) | self.read_2();
+        a = (a << 16) | self.read_2().at(self)?;
 
         self.bits2 = (1 << (n + 16)) | (a & ((1 << (n + 16)) - 1));
 
         if self.dst == 0 {
-            self.write_1(self.bits as u8);
+            self.write_1(self.bits as u8).at(self)?;
             self.bits >>= 8;
-            self.renormalize();
+            self.renormalize().at(self)?;
         }
 
         while self.dst + 4 < self.output.len() {
-            let mut sym = self.lookup_literal();
-            self.renormalize();
+            let mut sym = self.lookup_literal().at(self)?;
+            self.renormalize().at(self)?;
 
             if sym < 256 {
-                self.write_sym(sym as u8);
+                self.write_sym(sym as u8).at(self)?;
 
                 if self.dst + 4 >= self.output.len() {
                     break;
                 }
 
-                sym = self.lookup_literal();
-                self.renormalize();
+                sym = self.lookup_literal().at(self)?;
+                self.renormalize().at(self)?;
 
                 if sym < 256 {
-                    self.write_sym(sym as u8);
+                    self.write_sym(sym as u8).at(self)?;
                     continue;
                 }
             }
@@ -265,24 +320,24 @@ impl<'a> Core<'a> {
                 let nb = sym - 287;
                 sym = (self.bits as usize & ((1 << nb) - 1)) + (1 << nb) + 286;
                 self.bits >>= nb;
-                self.renormalize();
+                self.renormalize().at(self)?;
             }
 
             let copy_length = sym - 254;
 
-            sym = self.lookup_lsb();
-            self.renormalize();
+            sym = self.lookup_lsb().at(self)?;
+            self.renormalize().at(self)?;
 
             let mut match_dist;
             if sym >= 8 {
-                let nb = self.lookup_bits();
-                self.renormalize();
+                let nb = self.lookup_bits().at(self)?;
+                self.renormalize().at(self)?;
 
                 match_dist = self.bits & ((1 << (nb & 0xF)) - 1);
                 self.bits >>= nb & 0xF;
-                self.renormalize();
+                self.renormalize().at(self)?;
                 if nb >= 0x10 {
-                    match_dist = (match_dist << 16) | self.read_2();
+                    match_dist = (match_dist << 16) | self.read_2().at(self)?;
                 }
                 match_dist = (32 << nb) + (match_dist << 5) + sym as u32 - 39;
 
@@ -303,9 +358,11 @@ impl<'a> Core<'a> {
                 let src = self.dst - match_dist as usize;
                 self.output.copy_within(src..src + copy_length, self.dst);
             } else if match_dist >= 8 {
-                self.copy_chunks::<8>(copy_length, match_dist as usize);
+                self.copy_chunks::<8>(copy_length, match_dist as usize)
+                    .at(self)?;
             } else if match_dist >= 4 {
-                self.copy_chunks::<4>(copy_length, match_dist as usize);
+                self.copy_chunks::<4>(copy_length, match_dist as usize)
+                    .at(self)?;
             } else {
                 for i in 0..copy_length {
                     self.output[self.dst + i] = self.output[self.dst + i - match_dist as usize];
@@ -315,8 +372,8 @@ impl<'a> Core<'a> {
             self.dst += copy_length;
             self.state.last_match_dist = match_dist;
         }
-        self.write_2(self.bits as u16);
-        self.write_2(self.bits2 as u16);
+        self.write_2(self.bits as u16).at(self)?;
+        self.write_2(self.bits2 as u16).at(self)?;
 
         self.state.recent_dist_mask = recent_mask as u32;
         Ok(self.src)

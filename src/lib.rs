@@ -369,6 +369,7 @@ mod tests {
         fs,
         io::{Seek, SeekFrom},
         path::PathBuf,
+        time,
     };
 
     #[test_log::test]
@@ -379,7 +380,10 @@ mod tests {
             let path = path.unwrap().path();
             let filename = path.file_stem().unwrap().to_str().unwrap().to_string();
             let extension = path.extension().unwrap().to_str().unwrap().to_string();
-            log::info!("Extracting {}.{}", filename, extension);
+            // if extension != "bitknit" {
+            //     continue;
+            // }
+            let start = time::Instant::now();
             let mut file = fs::File::open(path).unwrap();
             let mut buf = [0; 8];
             file.read_exact(&mut buf).unwrap();
@@ -395,6 +399,12 @@ mod tests {
                 log::error!("Extracting {}.{} failed: {}", filename, extension, e);
                 panic!();
             }
+            log::info!(
+                "Extracting {}.{} took {:?}",
+                filename,
+                extension,
+                start.elapsed()
+            );
 
             let verify_file = format!("verify/{}", filename);
             log::debug!("compare to file {}", verify_file);
