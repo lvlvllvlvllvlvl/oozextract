@@ -1,5 +1,5 @@
 use crate::core::Core;
-use crate::error::{ErrorContext, OozError, WithContext};
+use crate::error::{ErrorContext, Res, WithContext};
 use crate::pointer::Pointer;
 
 pub const BASE_PREFIX: [usize; 12] = [
@@ -28,7 +28,7 @@ pub struct HuffReader {
 impl ErrorContext for HuffReader {}
 
 impl HuffReader {
-    pub fn decode_bytes(&mut self, core: &mut Core, lut: &HuffRevLut) -> Result<(), OozError> {
+    pub fn decode_bytes(&mut self, core: &mut Core, lut: &HuffRevLut) -> Res<()> {
         let mut src = self.src;
         let mut src_bits = self.src_bits;
         let mut src_bitpos = self.src_bitpos;
@@ -185,11 +185,7 @@ pub struct HuffRevLut {
 }
 
 impl Core<'_> {
-    pub fn make_lut(
-        &mut self,
-        prefix_cur: &[usize; 12],
-        syms: &[u8; 1280],
-    ) -> Result<HuffRevLut, OozError> {
+    pub fn make_lut(&mut self, prefix_cur: &[usize; 12], syms: &[u8; 1280]) -> Res<HuffRevLut> {
         let mut bits2len = [0u8; 2048 + 16];
         let mut bits2sym = [0u8; 2048 + 16];
         let mut currslot = 0;

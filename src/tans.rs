@@ -1,6 +1,6 @@
 use crate::bit_reader::{BitReader, BitReader2};
 use crate::core::Core;
-use crate::error::{ErrorContext, OozError, WithContext};
+use crate::error::{ErrorContext, Res, WithContext};
 use crate::pointer::Pointer;
 
 #[derive(Default)]
@@ -20,7 +20,7 @@ pub struct TansDecoder {
 impl ErrorContext for TansDecoder {}
 
 impl TansDecoder {
-    pub fn decode(&mut self, core: &mut Core) -> Result<(), OozError> {
+    pub fn decode(&mut self, core: &mut Core) -> Res<()> {
         assert!(
             self.ptr_f <= self.ptr_b,
             "{:?} > {:?}",
@@ -56,14 +56,14 @@ impl TansDecoder {
         Ok(())
     }
 
-    fn tans_forward_bits(&mut self, core: &mut Core) -> Result<(), OozError> {
+    fn tans_forward_bits(&mut self, core: &mut Core) -> Res<()> {
         self.bits_f |= core.get_le_bytes(self.ptr_f, 4).at(core)? << self.bitpos_f;
         self.ptr_f += (31 - self.bitpos_f) >> 3;
         self.bitpos_f |= 24;
         Ok(())
     }
 
-    fn tans_forward_round(&mut self, core: &mut Core, i: usize) -> Result<(), OozError> {
+    fn tans_forward_round(&mut self, core: &mut Core, i: usize) -> Res<()> {
         let e = &self.lut[self.state[i]];
         core.set(self.dst, e.symbol);
         self.dst += 1;
@@ -73,14 +73,14 @@ impl TansDecoder {
         Ok(())
     }
 
-    fn tans_backward_bits(&mut self, core: &mut Core) -> Result<(), OozError> {
+    fn tans_backward_bits(&mut self, core: &mut Core) -> Res<()> {
         self.bits_b |= core.get_be_bytes((self.ptr_b - 4)?, 4).at(core)? << self.bitpos_b;
         self.ptr_b -= (31 - self.bitpos_b) >> 3;
         self.bitpos_b |= 24;
         Ok(())
     }
 
-    fn tans_backward_round(&mut self, core: &mut Core, i: usize) -> Result<(), OozError> {
+    fn tans_backward_round(&mut self, core: &mut Core, i: usize) -> Res<()> {
         let e = &self.lut[self.state[i]];
         core.set(self.dst, e.symbol);
         self.dst += 1;
@@ -208,7 +208,7 @@ impl TansDecoder {
         core: &mut Core,
         bits: &mut BitReader,
         l_bits: i32,
-    ) -> Result<TansData, OozError> {
+    ) -> Res<TansData> {
         let mut tans_data = TansData {
             a_used: 0,
             b_used: 0,

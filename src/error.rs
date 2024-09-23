@@ -10,6 +10,8 @@ pub struct OozError {
     pub location: &'static Location<'static>,
 }
 
+pub type Res<T> = Result<T, OozError>;
+
 impl Error for OozError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         self.source.as_deref()

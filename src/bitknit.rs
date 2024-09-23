@@ -1,4 +1,4 @@
-use crate::error::{ErrorBuilder, ErrorContext, OozError, ResultBuilder, WithContext};
+use crate::error::{ErrorBuilder, ErrorContext, Res, ResultBuilder, WithContext};
 
 #[derive(Copy, Clone)]
 struct Base<const F: usize, const A: usize, const L: usize> {
@@ -32,7 +32,7 @@ impl<const F: usize, const A: usize, const L: usize> Base<F, A, L> {
     const SHIFT: u16 = if A == 301 { 6 } else { 9 };
     const F_INC: u16 = 1026 - A as u16;
 
-    fn fill_lut(&mut self) -> Result<(), OozError> {
+    fn fill_lut(&mut self) -> Res<()> {
         let mut p = 0;
         for (v, i) in self.a[1..].iter().zip(0u16..) {
             let p_end = (((v - 1) >> Self::SHIFT) + 1) as usize;
@@ -45,7 +45,7 @@ impl<const F: usize, const A: usize, const L: usize> Base<F, A, L> {
         Ok(())
     }
 
-    fn adapt(&mut self, sym: usize) -> Result<(), OozError> {
+    fn adapt(&mut self, sym: usize) -> Res<()> {
         self.adapt_interval = 1024;
         self.assert_lt(sym, F)?;
         self.freq[sym] += Self::F_INC;
@@ -61,7 +61,7 @@ impl<const F: usize, const A: usize, const L: usize> Base<F, A, L> {
         Ok(())
     }
 
-    fn lookup(&mut self, bits: &mut u32) -> Result<usize, OozError> {
+    fn lookup(&mut self, bits: &mut u32) -> Res<usize> {
         let masked = (*bits & 0x7FFF) as u16;
         let i = (masked >> Self::SHIFT) as usize;
         self.assert_lt(i, L)?;
@@ -177,7 +177,8 @@ impl<'a> Core<'a> {
     }
 
     fn read<const N: usize>(&self) -> Result<&[u8; N], ErrorBuilder> {
-        self.input
+        Ok(self
+            .input
             .get(self.src..)
             .and_then(|s| s.first_chunk())
             .message(|_| {
@@ -187,29 +188,29 @@ impl<'a> Core<'a> {
                     self.input.len(),
                     self.src
                 )
-            })
+            })?)
     }
 
-    fn read_2(&mut self) -> Result<u32, OozError> {
+    fn read_2(&mut self) -> Res<u32> {
         let v = u16::from_le_bytes(*self.read()?);
         self.src += 2;
         Ok(v as u32)
     }
 
-    fn read_4(&mut self) -> Result<u32, OozError> {
+    fn read_4(&mut self) -> Res<u32> {
         let v = u32::from_le_bytes(*self.read()?);
         self.src += 4;
         Ok(v)
     }
 
-    fn write_1(&mut self, v: u8) -> Result<(), OozError> {
+    fn write_1(&mut self, v: u8) -> Res<()> {
         self.assert_lt(self.dst, self.output.len())?;
         self.output[self.dst] = v;
         self.dst += 1;
         Ok(())
     }
 
-    fn write_2(&mut self, v: u16) -> Result<(), OozError> {
+    fn write_2(&mut self, v: u16) -> Res<()> {
         let i = self.dst;
         self.output
             .get_mut(i..i + 2)
@@ -219,7 +220,7 @@ impl<'a> Core<'a> {
         Ok(())
     }
 
-    fn write_sym(&mut self, sym: u8) -> Result<(), OozError> {
+    fn write_sym(&mut self, sym: u8) -> Res<()> {
         self.assert_lt(self.dst, self.output.len())?;
         self.output[self.dst] = sym.wrapping_add(self.last_match());
         self.dst += 1;
@@ -230,7 +231,7 @@ impl<'a> Core<'a> {
         &mut self,
         copy_length: usize,
         match_dist: usize,
-    ) -> Result<(), OozError> {
+    ) -> Res<()> {
         self.assert_le(match_dist, self.dst)?;
         self.assert_le(self.dst + copy_length, self.output.len())?;
         for i in 0..copy_length / CHUNK_SIZE {
@@ -249,19 +250,19 @@ impl<'a> Core<'a> {
         self.output[self.dst - self.state.last_match_dist as usize]
     }
 
-    fn lookup_literal(&mut self) -> Result<usize, OozError> {
+    fn lookup_literal(&mut self) -> Res<usize> {
         self.state.literals[self.litmodel[self.dst & 3]].lookup(&mut self.bits)
     }
 
-    fn lookup_lsb(&mut self) -> Result<usize, OozError> {
+    fn lookup_lsb(&mut self) -> Res<usize> {
         self.state.distance_lsb[self.distancelsb[self.dst & 3]].lookup(&mut self.bits)
     }
 
-    fn lookup_bits(&mut self) -> Result<usize, OozError> {
+    fn lookup_bits(&mut self) -> Res<usize> {
         self.state.distance_bits.lookup(&mut self.bits)
     }
 
-    fn renormalize(&mut self) -> Result<(), OozError> {
+    fn renormalize(&mut self) -> Res<()> {
         if self.bits < 0x10000 {
             self.bits = (self.bits << 16) | self.read_2().at(self)?;
         }
@@ -269,7 +270,7 @@ impl<'a> Core<'a> {
         Ok(())
     }
 
-    pub(crate) fn decode(&mut self) -> Result<usize, OozError> {
+    pub(crate) fn decode(&mut self) -> Res<usize> {
         let mut recent_mask = self.state.recent_dist_mask as usize;
 
         let v = self.read_4().at(self)?;

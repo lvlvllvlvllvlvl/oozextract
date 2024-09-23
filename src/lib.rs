@@ -15,7 +15,7 @@ mod pointer;
 mod tans;
 
 use crate::core::Core;
-use crate::error::{End::*, ErrorBuilder, ErrorContext, OozError, ResultBuilder, WithContext};
+use crate::error::{End::*, ErrorBuilder, ErrorContext, Res, ResultBuilder, WithContext};
 use crate::kraken::Kraken;
 use crate::leviathan::Leviathan;
 use crate::lzna::{Lzna, LznaState};
@@ -98,7 +98,7 @@ impl<In: Read + Seek> Extractor<In> {
     /// but decompressors for some formats may fail if the output would be smaller
     /// than the input buffer, as decompressed size doesn't appear to be encoded
     /// in the compression format.
-    pub fn read(&mut self, buf: &mut [u8]) -> Result<usize, OozError> {
+    pub fn read(&mut self, buf: &mut [u8]) -> Res<usize> {
         log::debug!("reading to buf with size {}", buf.len());
         let mut bytes_written = 0;
         while bytes_written < buf.len() {
@@ -128,7 +128,7 @@ impl<In: Read + Seek> Extractor<In> {
         }
     }
 
-    fn extract(&mut self, output: &mut [u8], offset: usize) -> Result<usize, OozError> {
+    fn extract(&mut self, output: &mut [u8], offset: usize) -> Res<usize> {
         let tmp = &mut [0; LARGE_BLOCK];
         let dst_bytes_left = std::cmp::min(output.len() - offset, self.header.block_size());
 
@@ -244,7 +244,7 @@ impl<In: Read + Seek> Extractor<In> {
         }
     }
 
-    fn parse_header(&mut self) -> Result<(), OozError> {
+    fn parse_header(&mut self) -> Res<()> {
         let [b1, b2] = self.read_bytes(2)?;
         if ((b1 & 0xF) != 0xC) || (((b1 >> 4) & 3) != 0) {
             self.raise(format!("Invalid header {:X}", u16::from_le_bytes([b1, b2])))?
@@ -259,7 +259,7 @@ impl<In: Read + Seek> Extractor<In> {
         }
     }
 
-    fn parse_quantum_header(&mut self) -> Result<QuantumHeader, OozError> {
+    fn parse_quantum_header(&mut self) -> Res<QuantumHeader> {
         if self.header.block_size() == LARGE_BLOCK {
             let v = usize::from_be_bytes(self.read_bytes(3)?);
             let size = v & 0x3FFFF;
@@ -310,7 +310,7 @@ impl<In: Read + Seek> Extractor<In> {
         }
     }
 
-    fn decoder_type(&mut self, value: u8) -> Result<DecoderType, OozError> {
+    fn decoder_type(&mut self, value: u8) -> Res<DecoderType> {
         match value {
             0x5 => Ok(DecoderType::Lzna),
             0x6 => Ok(DecoderType::Kraken),
@@ -321,7 +321,7 @@ impl<In: Read + Seek> Extractor<In> {
         }
     }
 
-    fn parse_whole_match(&mut self) -> Result<usize, OozError> {
+    fn parse_whole_match(&mut self) -> Res<usize> {
         let v = usize::from(u16::from_be_bytes(self.read_bytes(2)?));
         if v < 0x8000 {
             let mut x = 0;

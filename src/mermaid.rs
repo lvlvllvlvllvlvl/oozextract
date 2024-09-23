@@ -1,6 +1,6 @@
 use crate::algorithm::Algorithm;
 use crate::core::Core;
-use crate::error::{ErrorContext, OozError, ResultBuilder, WithContext};
+use crate::error::{ErrorContext, Res, ResultBuilder, WithContext};
 use crate::pointer::Pointer;
 use std::collections::VecDeque;
 
@@ -17,7 +17,7 @@ impl Algorithm for Mermaid {
         dst_start: Pointer,
         dst: Pointer,
         dst_size: usize,
-    ) -> Result<(), OozError> {
+    ) -> Res<()> {
         let offset = (dst - dst_start)?;
         let mut lz = MermaidLzTable::default();
         lz.read_lz_table(core, mode, src, src + src_used, dst, dst_size, offset)?;
@@ -107,7 +107,7 @@ impl MermaidLzTable {
         mut dst: Pointer,
         mut dst_size: usize,
         offset: usize,
-    ) -> Result<(), OozError> {
+    ) -> Res<()> {
         let mut saved_dist = -8;
 
         for iteration in 0..2 {
@@ -165,7 +165,7 @@ impl MermaidLzTable {
         src_end: Pointer,
         saved_dist: &mut i32,
         startoff: i32,
-    ) -> Result<(), OozError> {
+    ) -> Res<()> {
         let dst_end = dst + dst_size;
         let mut cmd_stream = self.cmd_stream;
         let cmd_stream_end = self.cmd_stream_end;
@@ -300,7 +300,7 @@ impl MermaidLzTable {
         mut dst: Pointer,
         dst_size: usize,
         offset: usize,
-    ) -> Result<(), OozError> {
+    ) -> Res<()> {
         let mut out;
         let mut decode_count = 0;
         let mut off32_size_2;
@@ -468,7 +468,7 @@ impl MermaidLzTable {
         stream1: bool,
         output_size: usize,
         offset: usize,
-    ) -> Result<usize, OozError> {
+    ) -> Res<usize> {
         let mut src_cur = src;
 
         if offset < (0xC00000 - 1) {

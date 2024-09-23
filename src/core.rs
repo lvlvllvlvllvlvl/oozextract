@@ -1,7 +1,7 @@
 use crate::algorithm::Algorithm;
 use crate::bit_reader::{BitReader, BitReader2};
 use crate::error::End::Idx;
-use crate::error::{ErrorContext, OozError, ResultBuilder, WithContext};
+use crate::error::{ErrorContext, Res, ResultBuilder, WithContext};
 use crate::huffman::{HuffRange, HuffReader, BASE_PREFIX};
 use crate::pointer::{IntPointer, Pointer, PointerDest};
 use crate::tans::TansDecoder;
@@ -37,10 +37,7 @@ impl Core<'_> {
 
     /// Decode one 256kb big quantum block. It's divided into two 128k blocks
     /// internally that are compressed separately but with a shared history.
-    pub fn decode_quantum<T: Algorithm + Debug>(
-        &mut self,
-        algorithm: T,
-    ) -> Result<usize, OozError> {
+    pub fn decode_quantum<T: Algorithm + Debug>(&mut self, algorithm: T) -> Res<usize> {
         let mut written_bytes = 0;
         let src_end = Pointer::input(self.input.len());
         let dst_start = Pointer::output(0);
@@ -109,7 +106,7 @@ impl Core<'_> {
         mut offs_stream: IntPointer,
         len_stream: IntPointer,
         excess_flag: bool,
-    ) -> Result<(), OozError> {
+    ) -> Res<()> {
         let mut n;
         let mut u32_len_stream_size = 0usize;
         let offs_stream_org = offs_stream;
@@ -236,7 +233,7 @@ impl Core<'_> {
         offs_stream_size: usize,
         scale: i32,
         low_bits: &Pointer,
-    ) -> Result<(), OozError> {
+    ) -> Res<()> {
         for i in 0..offs_stream_size {
             let low = self.get_byte(low_bits + i)? as i32;
             let scaled = scale * self.get_int(offs_stream + i).at(self)? - low;
@@ -254,7 +251,7 @@ impl Core<'_> {
         output_size: usize,
         force_memmove: bool,
         mut scratch: Pointer,
-    ) -> Result<usize, OozError> {
+    ) -> Res<usize> {
         let src_org = src;
         let src_size;
         let dst_size;
@@ -335,7 +332,7 @@ impl Core<'_> {
         output: Pointer,
         output_size: usize,
         chunk_type: usize,
-    ) -> Result<usize, OozError> {
+    ) -> Res<usize> {
         let half_output_size;
         let split_left;
         let split_mid;
@@ -435,7 +432,7 @@ impl Core<'_> {
         bits: &mut BitReader,
         syms: &mut [u8; 1280],
         code_prefix: &mut [usize; 12],
-    ) -> Result<i32, OozError> {
+    ) -> Res<i32> {
         if bits.read_bit_no_refill() {
             let mut sym = 0;
             let mut num_symbols = 0;
@@ -514,7 +511,7 @@ impl Core<'_> {
         bits: &mut BitReader,
         syms: &mut [u8; 1280],
         code_prefix: &mut [usize; 12],
-    ) -> Result<i32, OozError> {
+    ) -> Res<i32> {
         let forced_bits = bits.read_bits_no_refill(2);
 
         let num_symbols = bits.read_bits_no_refill(8) + 1;
@@ -577,7 +574,7 @@ impl Core<'_> {
         &mut self,
         mut dst: &mut [u8],
         br: &mut BitReader2,
-    ) -> Result<(), OozError> {
+    ) -> Res<()> {
         const K_RICE_CODE_BITS2VALUE: [u32; 256] = [
             0x80000000, 0x00000007, 0x10000006, 0x00000006, 0x20000005, 0x00000105, 0x10000005,
             0x00000005, 0x30000004, 0x00000204, 0x10000104, 0x00000104, 0x20000004, 0x00010004,
@@ -681,7 +678,7 @@ impl Core<'_> {
         mut dst: &mut [u8],
         bitcount: usize,
         br: &mut BitReader2,
-    ) -> Result<(), OozError> {
+    ) -> Res<()> {
         if bitcount == 0 {
             return Ok(());
         }
@@ -748,7 +745,7 @@ impl Core<'_> {
         p: usize,
         syms: &[u8],
         bits: &mut BitReader,
-    ) -> Result<Vec<HuffRange>, OozError> {
+    ) -> Res<Vec<HuffRange>> {
         let mut sym_idx = 0;
         let mut symlen = num_symbols as usize;
 
@@ -802,7 +799,7 @@ impl Core<'_> {
         mut output: Pointer,
         output_size: usize,
         scratch: Pointer,
-    ) -> Result<usize, OozError> {
+    ) -> Res<usize> {
         let mut src = src_org;
         let output_end = output + output_size;
         let src_end = src + src_size;
@@ -868,7 +865,7 @@ impl Core<'_> {
         total_size_out: &mut usize,
         force_memmove: bool,
         scratch: Pointer,
-    ) -> Result<usize, OozError> {
+    ) -> Res<usize> {
         let mut src = src_org;
 
         self.assert_le(4, (src_end - src)?)?;
@@ -1116,7 +1113,7 @@ impl Core<'_> {
         src_org: Pointer,
         src_end: Pointer,
         dest_capacity: usize,
-    ) -> Result<usize, OozError> {
+    ) -> Res<usize> {
         let mut src = src_org;
         let src_size;
         let dst_size;
@@ -1168,7 +1165,7 @@ impl Core<'_> {
         mut dst: Pointer,
         dst_size: usize,
         scratch: Pointer,
-    ) -> Result<usize, OozError> {
+    ) -> Res<usize> {
         self.assert_ne(src_size, 0)?;
         if src_size == 1 {
             self.memset(dst, self.get_byte(src)?, dst_size);
@@ -1259,7 +1256,7 @@ impl Core<'_> {
         src_size: usize,
         dst: Pointer,
         dst_size: usize,
-    ) -> Result<usize, OozError> {
+    ) -> Res<usize> {
         self.assert_le(8, src_size)?;
         self.assert_le(5, dst_size)?;
 

@@ -1,5 +1,5 @@
 use crate::core::Core;
-use crate::error::{ErrorBuilder, ErrorContext, OozError, ResultBuilder, WithContext};
+use crate::error::{ErrorBuilder, ErrorContext, Res, ResultBuilder, WithContext};
 use std::fmt::{Display, Formatter};
 use std::mem::size_of;
 
@@ -272,7 +272,7 @@ impl From<IntPointer> for Pointer {
 }
 
 impl Core<'_> {
-    pub fn get_byte(&self, p: Pointer) -> Result<u8, OozError> {
+    pub fn get_byte(&self, p: Pointer) -> Res<u8> {
         Ok(match p.into {
             PointerDest::Null => panic!(),
             PointerDest::Input => self.input.get(p.index),
@@ -283,7 +283,7 @@ impl Core<'_> {
         .map(|&v| v)
         .message(|_| format!("{}", p))?)
     }
-    pub fn get_slice(&mut self, p: Pointer, n: usize) -> Result<&[u8], OozError> {
+    pub fn get_slice(&mut self, p: Pointer, n: usize) -> Res<&[u8]> {
         Ok(match p.into {
             PointerDest::Null => panic!(),
             PointerDest::Input => self.input.get(p.index..p.index + n),
@@ -299,19 +299,19 @@ impl Core<'_> {
         }
         .message(|_| format!("oob {}..{}", p, p.index + n))?)
     }
-    pub fn get_le_bytes(&mut self, p: Pointer, n: usize) -> Result<usize, OozError> {
+    pub fn get_le_bytes(&mut self, p: Pointer, n: usize) -> Res<usize> {
         let mut bytes = [0; size_of::<usize>()];
         bytes[..n].copy_from_slice(self.get_slice(p, n)?);
         Ok(usize::from_le_bytes(bytes))
     }
-    pub fn get_be_bytes(&mut self, p: Pointer, n: usize) -> Result<usize, OozError> {
+    pub fn get_be_bytes(&mut self, p: Pointer, n: usize) -> Res<usize> {
         const B: usize = size_of::<usize>();
         let mut bytes = [0; B];
         bytes[B - n..].copy_from_slice(self.get_slice(p, n)?);
         Ok(usize::from_be_bytes(bytes))
     }
 
-    pub fn get_int(&mut self, p: IntPointer) -> Result<i32, OozError> {
+    pub fn get_int(&mut self, p: IntPointer) -> Res<i32> {
         Ok(i32::from_le_bytes(
             self.get_slice(Pointer::from(p), 4)?.try_into().at(self)?,
         ))
@@ -413,13 +413,7 @@ impl Core<'_> {
         }
     }
 
-    pub fn copy_64_add(
-        &mut self,
-        dest: Pointer,
-        lhs: Pointer,
-        rhs: Pointer,
-        n: usize,
-    ) -> Result<(), OozError> {
+    pub fn copy_64_add(&mut self, dest: Pointer, lhs: Pointer, rhs: Pointer, n: usize) -> Res<()> {
         for i in 0..n {
             self.set(
                 dest + i,

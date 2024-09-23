@@ -1,4 +1,4 @@
-use crate::error::{ErrorContext, OozError};
+use crate::error::{ErrorContext, Res};
 use std::array;
 
 type LznaBitModel = u16;
@@ -426,7 +426,7 @@ impl<'a> Lzna<'a> {
         length
     }
 
-    pub(crate) fn decode_quantum(&mut self, lut: &mut LznaState) -> Result<usize, OozError> {
+    pub(crate) fn decode_quantum(&mut self, lut: &mut LznaState) -> Res<usize> {
         lut.preprocess_match_history();
         self.init();
         let mut dist = lut.match_history[4] as usize;

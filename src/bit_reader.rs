@@ -1,5 +1,5 @@
 use crate::core::Core;
-use crate::error::{ErrorContext, OozError, WithContext};
+use crate::error::{ErrorContext, Res, WithContext};
 use crate::pointer::Pointer;
 
 pub struct BitReader {
@@ -22,7 +22,7 @@ pub struct BitReader2 {
 
 impl BitReader {
     /// Read more bytes to make sure we always have at least 24 bits in |bits|.
-    pub fn refill(&mut self, source: &Core) -> Result<(), OozError> {
+    pub fn refill(&mut self, source: &Core) -> Res<()> {
         assert!(self.bitpos <= 24);
         while self.bitpos > 0 {
             if self.p < self.p_end {
@@ -36,7 +36,7 @@ impl BitReader {
 
     /// Read more bytes to make sure we always have at least 24 bits in |bits|,
     /// used when reading backwards.
-    pub fn refill_backwards(&mut self, source: &Core) -> Result<(), OozError> {
+    pub fn refill_backwards(&mut self, source: &Core) -> Res<()> {
         assert!(self.bitpos <= 24);
         while self.bitpos > 0 {
             self.p -= 1;
@@ -49,7 +49,7 @@ impl BitReader {
     }
 
     /// Refill bits then read a single bit.
-    pub fn read_bit(&mut self, source: &Core) -> Result<bool, OozError> {
+    pub fn read_bit(&mut self, source: &Core) -> Res<bool> {
         self.refill(source).at(self)?;
         let r = self.bits >> 31;
         self.bits <<= 1;
@@ -80,7 +80,7 @@ impl BitReader {
         r as _
     }
 
-    pub fn read_more_than24bits(&mut self, source: &Core, n: i32) -> Result<i32, OozError> {
+    pub fn read_more_than24bits(&mut self, source: &Core, n: i32) -> Res<i32> {
         let mut rv;
         if n <= 24 {
             rv = self.read_bits_no_refill_zero(n);
@@ -94,7 +94,7 @@ impl BitReader {
         Ok(rv)
     }
 
-    pub fn read_more_than_24_bits_b(&mut self, source: &Core, n: i32) -> Result<i32, OozError> {
+    pub fn read_more_than_24_bits_b(&mut self, source: &Core, n: i32) -> Res<i32> {
         let mut rv;
         if n <= 24 {
             rv = self.read_bits_no_refill_zero(n);
@@ -109,7 +109,7 @@ impl BitReader {
     }
 
     /// Reads an offset code parametrized by |v|.
-    pub fn read_distance(&mut self, source: &Core, v: i32) -> Result<i32, OozError> {
+    pub fn read_distance(&mut self, source: &Core, v: i32) -> Res<i32> {
         let w;
         let m;
         let n;
@@ -138,7 +138,7 @@ impl BitReader {
     }
 
     /// Reads an offset code parametrized by |v|, backwards.
-    pub fn read_distance_b(&mut self, source: &Core, v: i32) -> Result<i32, OozError> {
+    pub fn read_distance_b(&mut self, source: &Core, v: i32) -> Res<i32> {
         let w;
         let m;
         let n;
@@ -168,7 +168,7 @@ impl BitReader {
     }
 
     /// Reads a length code.
-    pub fn read_length(&mut self, source: &Core) -> Result<i32, OozError> {
+    pub fn read_length(&mut self, source: &Core) -> Res<i32> {
         let mut n;
         n = self.leading_zeros();
         assert!(n <= 12);
@@ -184,7 +184,7 @@ impl BitReader {
     }
 
     /// Reads a length code, backwards.
-    pub fn read_length_b(&mut self, source: &Core) -> Result<i32, OozError> {
+    pub fn read_length_b(&mut self, source: &Core) -> Res<i32> {
         let mut n = self.leading_zeros();
         assert!(n <= 12);
         self.bitpos += n;

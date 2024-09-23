@@ -1,6 +1,6 @@
 use crate::algorithm::Algorithm;
 use crate::core::Core;
-use crate::error::{ErrorContext, OozError, WithContext};
+use crate::error::{ErrorContext, Res, WithContext};
 use crate::pointer::{IntPointer, Pointer};
 
 // Kraken decompression happens in two phases, first one decodes
@@ -45,7 +45,7 @@ impl Algorithm for Kraken {
         dst_start: Pointer,
         dst: Pointer,
         dst_size: usize,
-    ) -> Result<(), OozError> {
+    ) -> Res<()> {
         let mut lz = KrakenLzTable::default();
         lz.assert_le(mode, 1)?;
         let offset = (dst - dst_start)?;
@@ -63,7 +63,7 @@ impl KrakenLzTable {
         mut dst: Pointer,
         dst_size: usize,
         offset: usize,
-    ) -> Result<(), OozError> {
+    ) -> Res<()> {
         let mut out;
         let mut decode_count = 0;
         let mut n;
@@ -239,7 +239,7 @@ impl KrakenLzTable {
         mut dst: Pointer,
         dst_size: usize,
         offset: usize,
-    ) -> Result<(), OozError> {
+    ) -> Res<()> {
         let dst_end = dst + dst_size;
         if offset == 0 {
             dst += 8
