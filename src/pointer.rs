@@ -273,7 +273,7 @@ impl From<IntPointer> for Pointer {
 
 impl Core<'_> {
     pub fn get_byte(&self, p: Pointer) -> Result<u8, OozError> {
-        match p.into {
+        Ok(match p.into {
             PointerDest::Null => panic!(),
             PointerDest::Input => self.input.get(p.index),
             PointerDest::Output => self.output.get(p.index),
@@ -281,38 +281,40 @@ impl Core<'_> {
             PointerDest::Temp => self.tmp.get(p.index),
         }
         .map(|&v| v)
-        .message(|_| format!("{}", p))
-        .build()
+        .message(|_| format!("{}", p))?)
     }
-    pub fn get_slice(&mut self, p: Pointer, n: usize) -> &[u8] {
-        match p.into {
+    pub fn get_slice(&mut self, p: Pointer, n: usize) -> Result<&[u8], OozError> {
+        Ok(match p.into {
             PointerDest::Null => panic!(),
-            PointerDest::Input => &self.input[p.index..p.index + n],
-            PointerDest::Output => &self.output[p.index..p.index + n],
+            PointerDest::Input => self.input.get(p.index..p.index + n),
+            PointerDest::Output => self.output.get(p.index..p.index + n),
             PointerDest::Scratch => {
                 self.ensure_scratch(p.index + n);
-                &self.scratch[p.index..p.index + n]
+                self.scratch.get(p.index..p.index + n)
             }
             PointerDest::Temp => {
                 self.ensure_tmp(p.index + n);
-                &self.tmp[p.index..p.index + n]
+                self.tmp.get(p.index..p.index + n)
             }
         }
+        .message(|_| format!("oob {}..{}", p, p.index + n))?)
     }
-    pub fn get_bytes_as_usize_le(&mut self, p: Pointer, n: usize) -> usize {
+    pub fn get_le_bytes(&mut self, p: Pointer, n: usize) -> Result<usize, OozError> {
         let mut bytes = [0; size_of::<usize>()];
-        bytes[..n].copy_from_slice(self.get_slice(p, n));
-        usize::from_le_bytes(bytes)
+        bytes[..n].copy_from_slice(self.get_slice(p, n)?);
+        Ok(usize::from_le_bytes(bytes))
     }
-    pub fn get_bytes_as_usize_be(&mut self, p: Pointer, n: usize) -> usize {
+    pub fn get_be_bytes(&mut self, p: Pointer, n: usize) -> Result<usize, OozError> {
         const B: usize = size_of::<usize>();
         let mut bytes = [0; B];
-        bytes[B - n..].copy_from_slice(self.get_slice(p, n));
-        usize::from_be_bytes(bytes)
+        bytes[B - n..].copy_from_slice(self.get_slice(p, n)?);
+        Ok(usize::from_be_bytes(bytes))
     }
 
-    pub fn get_int(&mut self, p: IntPointer) -> i32 {
-        i32::from_le_bytes(self.get_slice(Pointer::from(p), 4).try_into().unwrap())
+    pub fn get_int(&mut self, p: IntPointer) -> Result<i32, OozError> {
+        Ok(i32::from_le_bytes(
+            self.get_slice(Pointer::from(p), 4)?.try_into().at(self)?,
+        ))
     }
 
     pub fn ensure_scratch(&mut self, size: usize) {

@@ -54,13 +54,13 @@ impl HuffReader {
             src_end -= 4;
 
             while dst < dst_end && src <= src_mid && src_mid <= src_end {
-                src_bits |= (core.get_bytes_as_usize_le(src, 4) as u32) << src_bitpos;
+                src_bits |= (core.get_le_bytes(src, 4).at(core)? as u32) << src_bitpos;
                 src += (31 - src_bitpos) >> 3;
 
-                src_end_bits |= (core.get_bytes_as_usize_be(src_end, 4) as u32) << src_end_bitpos;
+                src_end_bits |= (core.get_be_bytes(src_end, 4).at(core)? as u32) << src_end_bitpos;
                 src_end -= (31 - src_end_bitpos) >> 3;
 
-                src_mid_bits |= (core.get_bytes_as_usize_le(src_mid, 4) as u32) << src_mid_bitpos;
+                src_mid_bits |= (core.get_le_bytes(src_mid, 4).at(core)? as u32) << src_mid_bitpos;
                 src_mid += (31 - src_mid_bitpos) >> 3;
 
                 src_bitpos |= 0x18;
@@ -122,7 +122,7 @@ impl HuffReader {
                     src_bits |= (core.get_byte(src).at(self)? as u32) << src_bitpos;
                 }
             } else {
-                src_bits |= (core.get_bytes_as_usize_le(src, 2) as u32) << src_bitpos;
+                src_bits |= (core.get_le_bytes(src, 2).at(core)? as u32) << src_bitpos;
             }
             k = (src_bits & 0x7FF) as _;
             n = lut.bits2len[k];
@@ -141,10 +141,10 @@ impl HuffReader {
                         src_mid_bits |= mid << src_mid_bitpos;
                     }
                 } else {
-                    let v = core.get_bytes_as_usize_le((src_end - 2)?, 2) as u32;
+                    let v = core.get_le_bytes((src_end - 2)?, 2).at(self)? as u32;
                     src_end_bits |= (((v >> 8) | (v << 8)) & 0xffff) << src_end_bitpos;
                     src_mid_bits |=
-                        (core.get_bytes_as_usize_le(src_mid, 2) as u32) << src_mid_bitpos;
+                        (core.get_le_bytes(src_mid, 2).at(self)? as u32) << src_mid_bitpos;
                 }
                 n = lut.bits2len[(src_end_bits & 0x7FF) as usize];
                 core.set(dst, lut.bits2sym[(src_end_bits & 0x7FF) as usize]);

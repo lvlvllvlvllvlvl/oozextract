@@ -32,14 +32,14 @@ impl TansDecoder {
         while self.dst < self.dst_end {
             if step < 5 {
                 if step & 1 == 0 {
-                    self.tans_forward_bits(core);
+                    self.tans_forward_bits(core).at(self)?;
                 }
-                self.tans_forward_round(core, step);
+                self.tans_forward_round(core, step).at(self)?;
             } else {
                 if step & 1 == 1 {
                     self.tans_backward_bits(core).at(self)?;
                 }
-                self.tans_backward_round(core, step - 5);
+                self.tans_backward_round(core, step - 5).at(self)?;
             }
             step = (step + 1) % 10;
         }
@@ -56,35 +56,38 @@ impl TansDecoder {
         Ok(())
     }
 
-    fn tans_forward_bits(&mut self, core: &mut Core) {
-        self.bits_f |= core.get_bytes_as_usize_le(self.ptr_f, 4) << self.bitpos_f;
+    fn tans_forward_bits(&mut self, core: &mut Core) -> Result<(), OozError> {
+        self.bits_f |= core.get_le_bytes(self.ptr_f, 4).at(core)? << self.bitpos_f;
         self.ptr_f += (31 - self.bitpos_f) >> 3;
         self.bitpos_f |= 24;
+        Ok(())
     }
 
-    fn tans_forward_round(&mut self, core: &mut Core, i: usize) {
+    fn tans_forward_round(&mut self, core: &mut Core, i: usize) -> Result<(), OozError> {
         let e = &self.lut[self.state[i]];
         core.set(self.dst, e.symbol);
         self.dst += 1;
         self.bitpos_f -= e.bits_x as i32;
         self.state[i] = (self.bits_f & e.x as usize) + e.w as usize;
         self.bits_f >>= e.bits_x;
+        Ok(())
     }
 
     fn tans_backward_bits(&mut self, core: &mut Core) -> Result<(), OozError> {
-        self.bits_b |= core.get_bytes_as_usize_be((self.ptr_b - 4)?, 4) << self.bitpos_b;
+        self.bits_b |= core.get_be_bytes((self.ptr_b - 4)?, 4).at(core)? << self.bitpos_b;
         self.ptr_b -= (31 - self.bitpos_b) >> 3;
         self.bitpos_b |= 24;
         Ok(())
     }
 
-    fn tans_backward_round(&mut self, core: &mut Core, i: usize) {
+    fn tans_backward_round(&mut self, core: &mut Core, i: usize) -> Result<(), OozError> {
         let e = &self.lut[self.state[i]];
         core.set(self.dst, e.symbol);
         self.dst += 1;
         self.bitpos_b -= e.bits_x as i32;
         self.state[i] = (self.bits_b & e.x as usize) + e.w as usize;
         self.bits_b >>= e.bits_x;
+        Ok(())
     }
 
     pub fn init_lut(&self, tans_data: &TansData, l_bits: i32) -> Vec<TansLutEnt> {

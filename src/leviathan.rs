@@ -338,7 +338,7 @@ impl LeviathanLzTable {
             assert!(offs_index < 8);
             let mut matchlen = (cmd & 7) + 2;
 
-            recent_offs[15] = core.get_int(offs_stream);
+            recent_offs[15] = core.get_int(offs_stream).at(core)?;
 
             mode.copy_literals(core, cmd, &mut dst, &mut len_stream, match_zone_end, offset)
                 .at(self)?;
@@ -367,7 +367,7 @@ impl LeviathanLzTable {
             if matchlen == 9 {
                 assert!(len_stream < len_stream_end, "len stream empty");
                 len_stream_end = (len_stream_end - 1)?;
-                matchlen = (core.get_int(len_stream_end) + 6) as usize;
+                matchlen = (core.get_int(len_stream_end).at(core)? + 6) as usize;
                 assert!(matchlen <= (dst_end - dst)? - 8, "no space in buf");
                 core.repeat_copy_64(dst, copyfrom, matchlen);
                 dst += matchlen;
@@ -444,7 +444,7 @@ impl LeviathanMode for LeviathanModeSub {
     ) -> Result<(), OozError> {
         let mut litlen = (cmd >> 3) & 3;
         if litlen == 3 {
-            litlen = (core.get_int(*len_stream) & 0xffffff) as usize;
+            litlen = (core.get_int(*len_stream).at(core)? & 0xffffff) as usize;
             *len_stream += 1;
         }
         core.copy_64_add(*dst, self.lit_stream, *dst + last_offset, litlen)
@@ -490,7 +490,7 @@ impl LeviathanMode for LeviathanModeRaw {
     ) -> Result<(), OozError> {
         let mut litlen = (cmd >> 3) & 3;
         if litlen == 3 {
-            litlen = (core.get_int(*len_stream) & 0xffffff) as usize;
+            litlen = (core.get_int(*len_stream).at(core)? & 0xffffff) as usize;
             *len_stream += 1;
         }
         core.repeat_copy_64(*dst, self.lit_stream, litlen);
@@ -543,7 +543,7 @@ impl LeviathanMode for LeviathanModeLamSub {
 
         let mut litlen = lit_cmd >> 3;
         if litlen == 3 {
-            litlen = (core.get_int(*len_stream) & 0xffffff) as usize;
+            litlen = (core.get_int(*len_stream).at(core)? & 0xffffff) as usize;
             *len_stream += 1;
         }
 
@@ -632,7 +632,7 @@ impl<const NUM: usize> LeviathanMode for LeviathanModeSubAnd<NUM> {
     ) -> Result<(), OozError> {
         let lit_cmd = cmd & 0x18;
         if lit_cmd == 0x18 {
-            let litlen = core.get_int(*len_stream) as usize & 0xffffff;
+            let litlen = core.get_int(*len_stream).at(core)? as usize & 0xffffff;
             *len_stream += 1;
             assert!(litlen <= (match_zone_end - *dst)?);
             for _ in 0..litlen {
@@ -693,7 +693,7 @@ impl LeviathanMode for LeviathanModeO1 {
     ) -> Result<(), OozError> {
         let lit_cmd = cmd & 0x18;
         if lit_cmd == 0x18 {
-            let litlen = core.get_int(*len_stream);
+            let litlen = core.get_int(*len_stream).at(core)?;
             *len_stream += 1;
             assert!(litlen > 0);
             self.context = core.get_byte((*dst - 1)?).at(self)?;

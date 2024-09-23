@@ -49,7 +49,7 @@ impl Core<'_> {
         while self.dst_end > self.dst {
             let dst_count = std::cmp::min((self.dst_end - self.dst)?, 0x20000);
             self.assert_le(4, (src_end - self.src)?)?;
-            let chunkhdr = self.get_bytes_as_usize_be(self.src, 3);
+            let chunkhdr = self.get_be_bytes(self.src, 3).at(self)?;
             log::debug!("index: {}, chunk header: {}", self.src.index, chunkhdr);
             if (chunkhdr & 0x800000) == 0 {
                 log::debug!("Stored as entropy without any match copying.");
@@ -239,7 +239,7 @@ impl Core<'_> {
     ) -> Result<(), OozError> {
         for i in 0..offs_stream_size {
             let low = self.get_byte(low_bits + i)? as i32;
-            let scaled = scale * self.get_int(offs_stream + i) - low;
+            let scaled = scale * self.get_int(offs_stream + i).at(self)? - low;
             self.set_int(offs_stream + i, scaled)
         }
         Ok(())
@@ -271,7 +271,7 @@ impl Core<'_> {
                 src += 2;
             } else {
                 self.assert_le(3, (src_end - src)?)?;
-                src_size = self.get_bytes_as_usize_be(src, 3);
+                src_size = self.get_be_bytes(src, 3).at(self)?;
                 // reserved bits must not be set
                 self.assert_eq(src_size & !0x3ffff, 0)?;
                 src += 3;
@@ -293,14 +293,14 @@ impl Core<'_> {
             self.assert_le(3, (src_end - src)?)?;
 
             // short mode, 10 bit sizes
-            let bits = self.get_bytes_as_usize_be(src, 3);
+            let bits = self.get_be_bytes(src, 3).at(self)?;
             src_size = bits & 0x3ff;
             dst_size = src_size + ((bits >> 10) & 0x3ff) + 1;
             src += 3;
         } else {
             // long mode, 18 bit sizes
             self.assert_le(5, (src_end - src)?)?;
-            let bits = self.get_bytes_as_usize_be(src + 1, 4);
+            let bits = self.get_be_bytes(src + 1, 4).at(self)?;
             src_size = bits & 0x3ffff;
             dst_size = (((bits >> 18) | ((self.get_byte(src + 0)? as usize) << 14)) & 0x3FFFF) + 1;
             self.assert_lt(src_size, dst_size)?;
@@ -378,7 +378,7 @@ impl Core<'_> {
 
         if chunk_type == 1 {
             self.assert_le(3, (src_end - src)?)?;
-            split_mid = self.get_bytes_as_usize_le(src, 2);
+            split_mid = self.get_le_bytes(src, 2).at(self)?;
             src += 2;
             let mut hr = HuffReader {
                 output,
@@ -394,15 +394,15 @@ impl Core<'_> {
             self.assert_le(6, (src_end - src)?)?;
 
             half_output_size = (output_size + 1) >> 1;
-            split_mid = self.get_bytes_as_usize_le(src, 3);
+            split_mid = self.get_le_bytes(src, 3).at(self)?;
             src += 3;
             self.assert_le(split_mid, (src_end - src)?)?;
             src_mid = src + split_mid;
-            split_left = self.get_bytes_as_usize_le(src, 2);
+            split_left = self.get_le_bytes(src, 2).at(self)?;
             src += 2;
             self.assert_le(split_left + 2, (src_end - src)?)?;
             self.assert_le(3, (src_end - src_mid)?)?;
-            split_right = self.get_bytes_as_usize_le(src_mid, 2);
+            split_right = self.get_le_bytes(src_mid, 2).at(self)?;
             self.assert_le(split_right + 2, (src_end - (src_mid + 2))?)?;
 
             let mut hr = HuffReader {
@@ -700,7 +700,7 @@ impl Core<'_> {
                 1 => {
                     // Read the next byte
                     let mut bits =
-                        ((self.get_bytes_as_usize_be(p, 4) >> (24 - bitpos)) & 0xFF) as u64;
+                        ((self.get_be_bytes(p, 4).at(self)? >> (24 - bitpos)) & 0xFF) as u64;
                     p += 1;
                     // Expand each bit into each byte of the uint64.
                     bits = (bits | (bits << 28)) & 0xF0000000F;
@@ -711,7 +711,7 @@ impl Core<'_> {
                 2 => {
                     // Read the next 2 bytes
                     let mut bits =
-                        ((self.get_bytes_as_usize_be(p, 4) >> (16 - bitpos)) & 0xFFFF) as u64;
+                        ((self.get_be_bytes(p, 4).at(self)? >> (16 - bitpos)) & 0xFFFF) as u64;
                     p += 2;
                     // Expand each bit into each byte of the uint64.
                     bits = (bits | (bits << 24)) & 0xFF000000FF;
@@ -722,7 +722,7 @@ impl Core<'_> {
                 3 => {
                     // Read the next 3 bytes
                     let mut bits =
-                        ((self.get_bytes_as_usize_be(p, 4) >> (8 - bitpos)) & 0xffffff) as u64;
+                        ((self.get_be_bytes(p, 4).at(self)? >> (8 - bitpos)) & 0xffffff) as u64;
                     p += 3;
                     // Expand each bit into each byte of the uint64.
                     bits = (bits | (bits << 20)) & 0xFFF00000FFF;
@@ -934,7 +934,7 @@ impl Core<'_> {
 
         self.assert_le(3, (src_end - src)?)?;
 
-        let q = self.get_bytes_as_usize_le(src, 2);
+        let q = self.get_le_bytes(src, 2).at(self)?;
         src += 2;
 
         let num_indexes = self.get_block_size(src, src_end, total_size).at(self)?;
@@ -1031,10 +1031,10 @@ impl Core<'_> {
         ];
 
         for i in (0..num_lens & !1).step_by(2) {
-            bits_f |= self.get_bytes_as_usize_be(f, 4) as u32 >> (24 - bitpos_f);
+            bits_f |= self.get_be_bytes(f, 4).at(self)? as u32 >> (24 - bitpos_f);
             f += (bitpos_f + 7) >> 3;
 
-            bits_b |= self.get_bytes_as_usize_le((b - 4)?, 4) as u32 >> (24 - bitpos_b);
+            bits_b |= self.get_le_bytes((b - 4)?, 4).at(self)? as u32 >> (24 - bitpos_b);
             b -= (bitpos_b + 7) >> 3;
 
             let numbits_f = self.get_byte(interval_lenlog2 + i + 0)? as i32;
@@ -1058,7 +1058,7 @@ impl Core<'_> {
 
         // read final one since above loop reads 2
         if (num_lens & 1) == 1 {
-            bits_f |= self.get_bytes_as_usize_be(f, 4) as u32 >> (24 - bitpos_f);
+            bits_f |= self.get_be_bytes(f, 4).at(self)? as u32 >> (24 - bitpos_f);
             let numbits_f = self.get_byte((interval_lenlog2 + num_lens - 1)?)?;
             bits_f = (bits_f | 1).rotate_left(numbits_f as _);
             let value_f = bits_f & BITMASKS[numbits_f as usize];
@@ -1125,10 +1125,10 @@ impl Core<'_> {
         if chunk_type == 0 {
             if self.get_byte(src)? >= 0x80 {
                 // In this mode, memcopy stores the length in the bottom 12 bits.
-                src_size = self.get_bytes_as_usize_be(src, 2) & 0xFFF;
+                src_size = self.get_be_bytes(src, 2).at(self)? & 0xFFF;
                 src += 2;
             } else {
-                src_size = self.get_bytes_as_usize_be(src, 3);
+                src_size = self.get_be_bytes(src, 3).at(self)?;
                 self.assert_eq(src_size & !0x3ffff, 0)?; // reserved bits must not be set
                 src += 3;
             }
@@ -1143,14 +1143,14 @@ impl Core<'_> {
         // the src_size and the dst_size
         if self.get_byte(src)? >= 0x80 {
             // short mode, 10 bit sizes
-            let bits = self.get_bytes_as_usize_be(src, 3);
+            let bits = self.get_be_bytes(src, 3).at(self)?;
             src_size = bits & 0x3ff;
             dst_size = src_size + ((bits >> 10) & 0x3ff) + 1;
             src += 3;
         } else {
             // long mode, 18 bit sizes
             // no test coverage
-            let bits = self.get_bytes_as_usize_be(src, 5);
+            let bits = self.get_be_bytes(src, 5).at(self)?;
             src_size = bits & 0x3ffff;
             dst_size = (((bits >> 18) | ((self.get_byte(src)? as usize) << 14)) & 0x3FFFF) + 1;
             self.assert_lt(dst_size, src_size)?;
@@ -1216,7 +1216,7 @@ impl Core<'_> {
                 dst += bytes_to_rle;
             } else if cmd >= 0x10 {
                 cmd_ptr_end -= 2;
-                let data = self.get_bytes_as_usize_le(cmd_ptr_end, 2) - 4096;
+                let data = self.get_le_bytes(cmd_ptr_end, 2).at(self)? - 4096;
                 let bytes_to_copy = data & 0x3F;
                 let bytes_to_rle = data >> 6;
                 self.assert_le(bytes_to_copy + bytes_to_rle, (dst_end - dst)?)?;
@@ -1232,13 +1232,13 @@ impl Core<'_> {
                 cmd_ptr_end -= 1;
             } else if cmd >= 9 {
                 cmd_ptr_end -= 2;
-                let bytes_to_rle = (self.get_bytes_as_usize_le(cmd_ptr_end, 2) - 0x8ff) * 128;
+                let bytes_to_rle = (self.get_le_bytes(cmd_ptr_end, 2).at(self)? - 0x8ff) * 128;
                 self.assert_le(bytes_to_rle, (dst_end - dst)?)?;
                 self.memset(dst, rle_byte, bytes_to_rle);
                 dst += bytes_to_rle;
             } else {
                 cmd_ptr_end -= 2;
-                let bytes_to_copy = (self.get_bytes_as_usize_le(cmd_ptr_end, 2) - 511) * 64;
+                let bytes_to_copy = (self.get_le_bytes(cmd_ptr_end, 2).at(self)? - 511) * 64;
                 self.assert_le(bytes_to_copy, (cmd_ptr_end - cmd_ptr)?)?;
                 self.assert_le(bytes_to_copy, (dst_end - dst)?)?;
                 self.memcpy(dst, cmd_ptr, bytes_to_copy);
@@ -1291,10 +1291,10 @@ impl Core<'_> {
 
         // Read out the initial state
         let l_mask = (1 << l_bits) - 1;
-        let mut bits_f = self.get_bytes_as_usize_le(src, 4);
+        let mut bits_f = self.get_le_bytes(src, 4).at(self)?;
         src += 4;
         src_end -= 4;
-        let mut bits_b = self.get_bytes_as_usize_be(src_end, 4);
+        let mut bits_b = self.get_be_bytes(src_end, 4).at(self)?;
         let mut bitpos_f = 32;
         let mut bitpos_b = 32;
 
@@ -1315,7 +1315,7 @@ impl Core<'_> {
         bitpos_b -= l_bits;
 
         // Refill more bits
-        bits_f |= self.get_bytes_as_usize_le(src, 4) << bitpos_f;
+        bits_f |= self.get_le_bytes(src, 4).at(self)? << bitpos_f;
         src += (31 - bitpos_f) >> 3;
         bitpos_f |= 24;
 

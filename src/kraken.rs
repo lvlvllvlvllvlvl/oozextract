@@ -271,7 +271,7 @@ impl KrakenLzTable {
             let mut matchlen = (f >> 2) & 0xF;
 
             // use cmov
-            let next_long_length = core.get_int(len_stream);
+            let next_long_length = core.get_int(len_stream).at(core)?;
             let next_len_stream = len_stream + 1;
 
             len_stream = if litlen == 3 {
@@ -284,7 +284,7 @@ impl KrakenLzTable {
             } else {
                 litlen
             };
-            recent_offs[6] = core.get_int(offs_stream);
+            recent_offs[6] = core.get_int(offs_stream).at(core)?;
 
             if mode == 0 {
                 core.copy_64_add(dst, lit_stream, dst + last_offset, litlen)
@@ -310,7 +310,9 @@ impl KrakenLzTable {
                 dst += matchlen + 2;
             } else {
                 // why is the value not 16 here, the above case copies up to 16 bytes.
-                matchlen = (14 + core.get_int(len_stream)).try_into().unwrap();
+                matchlen = (14 + core.get_int(len_stream).at(core)?)
+                    .try_into()
+                    .unwrap();
                 len_stream += 1;
                 core.repeat_copy_64(dst, copyfrom, matchlen);
                 dst += matchlen;

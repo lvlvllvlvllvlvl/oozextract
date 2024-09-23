@@ -59,46 +59,29 @@ pub(crate) struct ErrorBuilder {
 
 pub trait ResultBuilder<T> {
     fn message<F: FnOnce(Option<&str>) -> String>(self, msg: F) -> Result<T, ErrorBuilder>;
-    fn build(self) -> Result<T, OozError>;
 }
 
 impl<T> ResultBuilder<T> for Result<T, ErrorBuilder> {
-    fn message<F: FnOnce(Option<&str>) -> String>(self, f: F) -> Self {
-        self.map_err(|e| {
-            let message = Some(f(e.message.as_ref().map(String::as_str)));
-            ErrorBuilder { message, ..e }
-        })
-    }
-
-    #[track_caller]
-    fn build(self) -> Result<T, OozError> {
-        self.map_err(
-            |ErrorBuilder {
-                 message,
-                 context,
-                 source,
-             }| OozError {
-                message,
-                context,
-                source,
-                location: Location::caller(),
-            },
-        )
+    fn message<F: FnOnce(Option<&str>) -> String>(self, msg: F) -> Self {
+        match self {
+            Ok(v) => Ok(v),
+            Err(e) => Err(ErrorBuilder {
+                message: Some(msg(e.message.as_ref().map(String::as_str))),
+                ..Default::default()
+            }),
+        }
     }
 }
 
 impl<T> ResultBuilder<T> for Option<T> {
     fn message<F: FnOnce(Option<&str>) -> String>(self, msg: F) -> Result<T, ErrorBuilder> {
-        self.ok_or_else(ErrorBuilder::default).message(msg)
-    }
-    #[track_caller]
-    fn build(self) -> Result<T, OozError> {
-        self.ok_or_else(|| OozError {
-            message: None,
-            context: None,
-            source: None,
-            location: Location::caller(),
-        })
+        match self {
+            Some(v) => Ok(v),
+            None => Err(ErrorBuilder {
+                message: Some(msg(None)),
+                ..Default::default()
+            }),
+        }
     }
 }
 
