@@ -201,6 +201,7 @@ impl TansDecoder {
 
     /// Tans_DecodeTable
     pub fn decode_table(
+        &mut self,
         core: &mut Core,
         bits: &mut BitReader,
         l_bits: i32,
@@ -211,7 +212,7 @@ impl TansDecoder {
             a: [0; 256],
             b: [0; 256],
         };
-        bits.refill(core);
+        bits.refill(core).at(self)?;
         if bits.read_bit_no_refill() {
             let q = bits.read_bits_no_refill(3);
             let num_symbols = bits.read_bits_no_refill(8) + 1;
@@ -234,7 +235,7 @@ impl TansDecoder {
             bits.bitpos = 24;
             bits.p = br2.p;
             bits.bits = 0;
-            bits.refill(core);
+            bits.refill(core).at(self)?;
             bits.bits <<= br2.bitpos;
             bits.bitpos += br2.bitpos as i32;
 
@@ -242,7 +243,7 @@ impl TansDecoder {
                 .convert_to_ranges(num_symbols, fluff, &rice, bits)
                 .at(&mut tans_data)?;
 
-            bits.refill(core);
+            bits.refill(core).at(self)?;
 
             let l = 1 << l_bits;
             let mut cur_rice_ptr: &[u8] = &rice;
@@ -254,7 +255,7 @@ impl TansDecoder {
             for ri in range {
                 let mut symbol = ri.symbol as i32;
                 for _ in 0..ri.num {
-                    bits.refill(core);
+                    bits.refill(core).at(self)?;
 
                     let nextra = cur_rice_ptr[0] as i32 + q;
                     cur_rice_ptr = &cur_rice_ptr[1..];
@@ -307,7 +308,7 @@ impl TansDecoder {
             let mut total_weights = 0;
 
             for _ in 0..count {
-                bits.refill(core);
+                bits.refill(core).at(self)?;
 
                 let sym = bits.read_bits_no_refill(8);
                 assert!(!seen[sym as usize], "{}", sym);
@@ -330,7 +331,7 @@ impl TansDecoder {
                 total_weights += weight;
             }
 
-            bits.refill(core);
+            bits.refill(core).at(self)?;
 
             let sym = bits.read_bits_no_refill(8);
             assert!(!seen[sym as usize], "{}", sym);

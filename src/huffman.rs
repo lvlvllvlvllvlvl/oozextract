@@ -1,5 +1,5 @@
 use crate::core::Core;
-use crate::error::{ErrorContext, OozError};
+use crate::error::{ErrorContext, OozError, WithContext};
 use crate::pointer::Pointer;
 
 pub const BASE_PREFIX: [usize; 12] = [
@@ -28,7 +28,7 @@ pub struct HuffReader {
 impl ErrorContext for HuffReader {}
 
 impl HuffReader {
-    pub fn decode_bytes(&mut self, mem: &mut Core, lut: &HuffRevLut) -> Result<(), OozError> {
+    pub fn decode_bytes(&mut self, core: &mut Core, lut: &HuffRevLut) -> Result<(), OozError> {
         let mut src = self.src;
         let mut src_bits = self.src_bits;
         let mut src_bitpos = self.src_bitpos;
@@ -54,13 +54,13 @@ impl HuffReader {
             src_end -= 4;
 
             while dst < dst_end && src <= src_mid && src_mid <= src_end {
-                src_bits |= (mem.get_bytes_as_usize_le(src, 4) as u32) << src_bitpos;
+                src_bits |= (core.get_bytes_as_usize_le(src, 4) as u32) << src_bitpos;
                 src += (31 - src_bitpos) >> 3;
 
-                src_end_bits |= (mem.get_bytes_as_usize_be(src_end, 4) as u32) << src_end_bitpos;
+                src_end_bits |= (core.get_bytes_as_usize_be(src_end, 4) as u32) << src_end_bitpos;
                 src_end -= (31 - src_end_bitpos) >> 3;
 
-                src_mid_bits |= (mem.get_bytes_as_usize_le(src_mid, 4) as u32) << src_mid_bitpos;
+                src_mid_bits |= (core.get_bytes_as_usize_le(src_mid, 4) as u32) << src_mid_bitpos;
                 src_mid += (31 - src_mid_bitpos) >> 3;
 
                 src_bitpos |= 0x18;
@@ -71,37 +71,37 @@ impl HuffReader {
                 n = lut.bits2len[k];
                 src_bits >>= n as u32;
                 src_bitpos -= n as i32;
-                mem.set(dst + 0, lut.bits2sym[k]);
+                core.set(dst + 0, lut.bits2sym[k]);
 
                 k = (src_end_bits & 0x7FF) as _;
                 n = lut.bits2len[k];
                 src_end_bits >>= n as u32;
                 src_end_bitpos -= n as i32;
-                mem.set(dst + 1, lut.bits2sym[k]);
+                core.set(dst + 1, lut.bits2sym[k]);
 
                 k = (src_mid_bits & 0x7FF) as _;
                 n = lut.bits2len[k];
                 src_mid_bits >>= n as u32;
                 src_mid_bitpos -= n as i32;
-                mem.set(dst + 2, lut.bits2sym[k]);
+                core.set(dst + 2, lut.bits2sym[k]);
 
                 k = (src_bits & 0x7FF) as _;
                 n = lut.bits2len[k];
                 src_bits >>= n as u32;
                 src_bitpos -= n as i32;
-                mem.set(dst + 3, lut.bits2sym[k]);
+                core.set(dst + 3, lut.bits2sym[k]);
 
                 k = (src_end_bits & 0x7FF) as _;
                 n = lut.bits2len[k];
                 src_end_bits >>= n as u32;
                 src_end_bitpos -= n as i32;
-                mem.set(dst + 4, lut.bits2sym[k]);
+                core.set(dst + 4, lut.bits2sym[k]);
 
                 k = (src_mid_bits & 0x7FF) as _;
                 n = lut.bits2len[k];
                 src_mid_bits >>= n as u32;
                 src_mid_bitpos -= n as i32;
-                mem.set(dst + 5, lut.bits2sym[k]);
+                core.set(dst + 5, lut.bits2sym[k]);
                 dst += 6;
             }
             dst_end += 5;
@@ -119,16 +119,16 @@ impl HuffReader {
             if (src_mid - src)? <= 1 {
                 if (src_mid - src)? == 1 {
                     // no test coverage
-                    src_bits |= (mem.get_byte(src) as u32) << src_bitpos;
+                    src_bits |= (core.get_byte(src).at(self)? as u32) << src_bitpos;
                 }
             } else {
-                src_bits |= (mem.get_bytes_as_usize_le(src, 2) as u32) << src_bitpos;
+                src_bits |= (core.get_bytes_as_usize_le(src, 2) as u32) << src_bitpos;
             }
             k = (src_bits & 0x7FF) as _;
             n = lut.bits2len[k];
             src_bitpos -= n as i32;
             src_bits >>= n as u32;
-            mem.set(dst, lut.bits2sym[k]);
+            core.set(dst, lut.bits2sym[k]);
             dst += 1;
             src += (7 - src_bitpos) >> 3;
             src_bitpos &= 7;
@@ -136,18 +136,18 @@ impl HuffReader {
             if dst < dst_end {
                 if (src_end - src_mid)? <= 1 {
                     if (src_end - src_mid)? == 1 {
-                        let mid = mem.get_byte(src_mid) as u32;
+                        let mid = core.get_byte(src_mid).at(self)? as u32;
                         src_end_bits |= mid << src_end_bitpos;
                         src_mid_bits |= mid << src_mid_bitpos;
                     }
                 } else {
-                    let v = mem.get_bytes_as_usize_le((src_end - 2)?, 2) as u32;
+                    let v = core.get_bytes_as_usize_le((src_end - 2)?, 2) as u32;
                     src_end_bits |= (((v >> 8) | (v << 8)) & 0xffff) << src_end_bitpos;
                     src_mid_bits |=
-                        (mem.get_bytes_as_usize_le(src_mid, 2) as u32) << src_mid_bitpos;
+                        (core.get_bytes_as_usize_le(src_mid, 2) as u32) << src_mid_bitpos;
                 }
                 n = lut.bits2len[(src_end_bits & 0x7FF) as usize];
-                mem.set(dst, lut.bits2sym[(src_end_bits & 0x7FF) as usize]);
+                core.set(dst, lut.bits2sym[(src_end_bits & 0x7FF) as usize]);
                 dst += 1;
                 src_end_bitpos -= n as i32;
                 src_end_bits >>= n as u32;
@@ -155,7 +155,7 @@ impl HuffReader {
                 src_end_bitpos &= 7;
                 if dst < dst_end {
                     n = lut.bits2len[(src_mid_bits & 0x7FF) as usize];
-                    mem.set(dst, lut.bits2sym[(src_mid_bits & 0x7FF) as usize]);
+                    core.set(dst, lut.bits2sym[(src_mid_bits & 0x7FF) as usize]);
                     dst += 1;
                     src_mid_bitpos -= n as i32;
                     src_mid_bits >>= n as u32;

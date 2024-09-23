@@ -182,12 +182,13 @@ impl MermaidLzTable {
         dst += startoff;
 
         while cmd_stream < cmd_stream_end {
-            let cmd = core.get_as_usize(cmd_stream);
+            let cmd = core.get_byte(cmd_stream).at(self)? as usize;
             cmd_stream += 1;
             if cmd >= 24 {
                 let litlen = cmd & 7;
                 if ADD_MODE {
-                    core.copy_64_add(dst, lit_stream, dst + recent_offs, litlen);
+                    core.copy_64_add(dst, lit_stream, dst + recent_offs, litlen)
+                        .at(self)?;
                 } else {
                     core.repeat_copy_64(dst, lit_stream, litlen);
                 }
@@ -213,7 +214,7 @@ impl MermaidLzTable {
                 //simde_mm_prefetch((char*)dst_begin - off32_stream[3], SIMDE_MM_HINT_T0);
             } else if cmd == 0 {
                 self.assert_lt(length_stream, src_end)?;
-                length = core.get_as_usize(length_stream);
+                length = core.get_byte(length_stream).at(self)? as usize;
                 if length > 251 {
                     assert!((src_end - length_stream)? >= 3);
                     length += core.get_bytes_as_usize_le(length_stream + 1, 2) * 4;
@@ -225,7 +226,8 @@ impl MermaidLzTable {
                 assert!((dst_end - dst)? >= length);
                 assert!((lit_stream_end - lit_stream)? >= length);
                 if ADD_MODE {
-                    core.copy_64_add(dst, lit_stream, dst + recent_offs, length);
+                    core.copy_64_add(dst, lit_stream, dst + recent_offs, length)
+                        .at(self)?;
                 } else {
                     core.repeat_copy_64(dst, lit_stream, length);
                 }
@@ -233,7 +235,7 @@ impl MermaidLzTable {
                 lit_stream += length;
             } else if cmd == 1 {
                 self.assert_lt(length_stream, src_end)?;
-                length = core.get_as_usize(length_stream);
+                length = core.get_byte(length_stream).at(self)? as usize;
                 if length > 251 {
                     assert!((src_end - length_stream)? >= 3);
                     length += core.get_bytes_as_usize_le(length_stream + 1, 2) * 4;
@@ -254,7 +256,7 @@ impl MermaidLzTable {
             } else {
                 /* flag == 2 */
                 self.assert_lt(length_stream, src_end)?;
-                length = core.get_as_usize(length_stream);
+                length = core.get_byte(length_stream).at(self)? as usize;
                 if length > 251 {
                     assert!((src_end - length_stream)? >= 3);
                     length += core.get_bytes_as_usize_le(length_stream + 1, 2) * 4;
@@ -274,7 +276,8 @@ impl MermaidLzTable {
 
         length = (dst_end - dst)?;
         if ADD_MODE {
-            core.copy_64_add(dst, lit_stream, dst + recent_offs, length);
+            core.copy_64_add(dst, lit_stream, dst + recent_offs, length)
+                .at(self)?;
         } else {
             core.repeat_copy_64(dst, lit_stream, length);
         }
@@ -398,9 +401,9 @@ impl MermaidLzTable {
             self.assert_eq(off16_lo_count, off16_hi_count)?;
             self.off16_stream.reserve(off16_lo_count);
             for i in 0..off16_lo_count {
-                self.off16_stream.push_back(
-                    core.get_byte(off16_lo + i) as u16 + core.get_byte(off16_hi + i) as u16 * 256,
-                )
+                let off16 = core.get_byte(off16_lo + i).at(self)? as u16
+                    + core.get_byte(off16_hi + i).at(self)? as u16 * 256;
+                self.off16_stream.push_back(off16)
             }
         } else {
             self.off16_stream = core
@@ -443,25 +446,13 @@ impl MermaidLzTable {
             // ((uint64*)scratch)[2] = 0;
             // ((uint64*)scratch)[3] = 0;
 
-            src += MermaidLzTable::decode_far_offsets(
-                core,
-                src,
-                src_end,
-                &mut self.off32_stream_1,
-                off32_size_1,
-                offset,
-            )
-            .at(self)?;
+            src += self
+                .decode_far_offsets(core, src, src_end, true, off32_size_1, offset)
+                .at(self)?;
 
-            src += MermaidLzTable::decode_far_offsets(
-                core,
-                src,
-                src_end,
-                &mut self.off32_stream_2,
-                off32_size_2,
-                offset + 0x10000,
-            )
-            .at(self)?;
+            src += self
+                .decode_far_offsets(core, src, src_end, false, off32_size_2, offset + 0x10000)
+                .at(self)?;
         }
         self.length_stream = src;
 
@@ -469,10 +460,11 @@ impl MermaidLzTable {
     }
 
     fn decode_far_offsets(
+        &mut self,
         core: &mut Core,
         src: Pointer,
         src_end: Pointer,
-        output: &mut Vec<u32>,
+        stream1: bool,
         output_size: usize,
         offset: usize,
     ) -> Result<usize, OozError> {
@@ -484,7 +476,11 @@ impl MermaidLzTable {
                 let off = core.get_bytes_as_usize_le(src_cur, 3);
                 src_cur += 3;
                 assert!(off <= offset);
-                output.push(off as u32);
+                if stream1 {
+                    self.off32_stream_1.push(off as u32)
+                } else {
+                    self.off32_stream_2.push(off as u32)
+                }
             }
             Ok((src_cur - src)?)
         } else {
@@ -495,11 +491,15 @@ impl MermaidLzTable {
 
                 if off >= 0xc00000 {
                     assert_ne!(src_cur, src_end);
-                    off += core.get_as_usize(src_cur) << 22;
+                    off += (core.get_byte(src_cur).at(self)? as usize) << 22;
                     src_cur += 1;
                 }
                 assert!(off <= offset);
-                output.push(off as u32);
+                if stream1 {
+                    self.off32_stream_1.push(off as u32)
+                } else {
+                    self.off32_stream_2.push(off as u32)
+                }
             }
             Ok((src_cur - src)?)
         }

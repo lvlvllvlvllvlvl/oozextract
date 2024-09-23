@@ -120,7 +120,7 @@ impl Core<'_> {
             p: src,
             p_end: src_end,
         };
-        bits_a.refill(self);
+        bits_a.refill(self).at(self)?;
 
         let mut bits_b = BitReader {
             bitpos: 24,
@@ -128,33 +128,37 @@ impl Core<'_> {
             p: src_end,
             p_end: src,
         };
-        bits_b.refill_backwards(self);
+        bits_b.refill_backwards(self).at(self)?;
 
         if !excess_flag {
             self.assert_le(0x2000, bits_b.bits)?;
             n = bits_b.leading_zeros();
             bits_b.bitpos += n;
             bits_b.bits <<= n;
-            bits_b.refill_backwards(self);
+            bits_b.refill_backwards(self).at(self)?;
             n += 1;
             u32_len_stream_size = ((bits_b.bits >> (32 - n)) - 1) as usize;
             bits_b.bitpos += n;
             bits_b.bits <<= n;
-            bits_b.refill_backwards(self);
+            bits_b.refill_backwards(self).at(self)?;
         }
 
         if multi_dist_scale == 0 {
             // Traditional way of coding offsets
             let packed_offs_stream_end = packed_offs_stream + packed_offs_stream_size;
             while packed_offs_stream != packed_offs_stream_end {
-                let d_a = bits_a.read_distance(self, self.get_byte(packed_offs_stream).into());
+                let d_a = bits_a
+                    .read_distance(self, self.get_byte(packed_offs_stream)?.into())
+                    .at(self)?;
                 self.set_int(offs_stream, -d_a);
                 offs_stream += 1;
                 packed_offs_stream += 1;
                 if packed_offs_stream == packed_offs_stream_end {
                     break;
                 }
-                let d_b = bits_b.read_distance_b(self, self.get_byte(packed_offs_stream).into());
+                let d_b = bits_b
+                    .read_distance_b(self, self.get_byte(packed_offs_stream)?.into())
+                    .at(self)?;
                 self.set_int(offs_stream, -d_b);
                 offs_stream += 1;
                 packed_offs_stream += 1;
@@ -165,21 +169,21 @@ impl Core<'_> {
             let mut cmd;
             let mut offs;
             while packed_offs_stream != packed_offs_stream_end {
-                cmd = self.get_byte(packed_offs_stream) as i32;
+                cmd = self.get_byte(packed_offs_stream)? as i32;
                 packed_offs_stream += 1;
                 self.assert_le(cmd >> 3, 26)?;
-                offs =
-                    ((8 + (cmd & 7)) << (cmd >> 3)) | bits_a.read_more_than24bits(self, cmd >> 3);
+                offs = ((8 + (cmd & 7)) << (cmd >> 3))
+                    | bits_a.read_more_than24bits(self, cmd >> 3).at(self)?;
                 self.set_int(offs_stream, 8 - offs);
                 offs_stream += 1;
                 if packed_offs_stream == packed_offs_stream_end {
                     break;
                 }
-                cmd = i32::from(self.get_byte(packed_offs_stream));
+                cmd = i32::from(self.get_byte(packed_offs_stream)?);
                 packed_offs_stream += 1;
                 self.assert_le(cmd >> 3, 26)?;
                 offs = ((8 + (cmd & 7)) << (cmd >> 3))
-                    | bits_b.read_more_than_24_bits_b(self, cmd >> 3);
+                    | bits_b.read_more_than_24_bits_b(self, cmd >> 3).at(self)?;
                 self.set_int(offs_stream, 8 - offs);
                 offs_stream += 1;
             }
@@ -203,9 +207,9 @@ impl Core<'_> {
             .enumerate()
         {
             if i % 2 == 0 {
-                *dst = bits_a.read_length(self) as u32
+                *dst = bits_a.read_length(self).at(self)? as u32
             } else {
-                *dst = bits_b.read_length_b(self) as u32
+                *dst = bits_b.read_length_b(self).at(self)? as u32
             }
         }
 
@@ -215,7 +219,7 @@ impl Core<'_> {
         self.assert_eq(bits_a.p, bits_b.p)?;
 
         for i in 0..packed_litlen_stream_size {
-            let mut v = u32::from(self.get_byte(packed_litlen_stream + i));
+            let mut v = u32::from(self.get_byte(packed_litlen_stream + i)?);
             if v == 255 {
                 v = u32_len_stream_buf[u32_len_stream] + 255;
                 u32_len_stream += 1;
@@ -234,7 +238,7 @@ impl Core<'_> {
         low_bits: &Pointer,
     ) -> Result<(), OozError> {
         for i in 0..offs_stream_size {
-            let low = self.get_byte(low_bits + i) as i32;
+            let low = self.get_byte(low_bits + i)? as i32;
             let scaled = scale * self.get_int(offs_stream + i) - low;
             self.set_int(offs_stream + i, scaled)
         }
@@ -257,11 +261,13 @@ impl Core<'_> {
 
         self.assert_le(2, (src_end - src)?)?;
 
-        let chunk_type = (self.get_as_usize(src + 0) >> 4) & 0x7;
+        let chunk_type = (self.get_byte(src + 0)? as usize >> 4) & 0x7;
         if chunk_type == 0 {
-            if self.get_as_usize(src + 0) >= 0x80 {
+            if (self.get_byte(src + 0)? as usize) >= 0x80 {
                 // In this mode, memcopy stores the length in the bottom 12 bits.
-                src_size = ((self.get_as_usize(src + 0) << 8) | self.get_as_usize(src + 1)) & 0xFFF;
+                src_size = (((self.get_byte(src + 0)? as usize) << 8)
+                    | (self.get_byte(src + 1)? as usize))
+                    & 0xFFF;
                 src += 2;
             } else {
                 self.assert_le(3, (src_end - src)?)?;
@@ -283,7 +289,7 @@ impl Core<'_> {
 
         // In all the other modes, the initial bytes encode
         // the src_size and the dst_size
-        if self.get_byte(src) >= 0x80 {
+        if self.get_byte(src)? >= 0x80 {
             self.assert_le(3, (src_end - src)?)?;
 
             // short mode, 10 bit sizes
@@ -296,7 +302,7 @@ impl Core<'_> {
             self.assert_le(5, (src_end - src)?)?;
             let bits = self.get_bytes_as_usize_be(src + 1, 4);
             src_size = bits & 0x3ffff;
-            dst_size = (((bits >> 18) | (self.get_as_usize(src + 0) << 14)) & 0x3FFFF) + 1;
+            dst_size = (((bits >> 18) | ((self.get_byte(src + 0)? as usize) << 14)) & 0x3FFFF) + 1;
             self.assert_lt(src_size, dst_size)?;
             src += 5;
         }
@@ -343,7 +349,7 @@ impl Core<'_> {
             p: src,
             p_end: src_end,
         };
-        bits.refill(self);
+        bits.refill(self).at(self)?;
 
         let mut code_prefix = BASE_PREFIX;
         let mut syms = [0; 1280];
@@ -437,7 +443,7 @@ impl Core<'_> {
             let forced_bits = bits.read_bits_no_refill(2);
 
             let thres_for_valid_gamma_bits = 1 << (31 - (20 >> forced_bits));
-            let mut skip_initial_zeros = bits.read_bit(self);
+            let mut skip_initial_zeros = bits.read_bit(self).at(self)?;
             while sym != 256 {
                 if skip_initial_zeros {
                     skip_initial_zeros = false;
@@ -449,13 +455,13 @@ impl Core<'_> {
                         break;
                     }
                 }
-                bits.refill(self);
+                bits.refill(self).at(self)?;
                 // Read out the gamma value for the # of symbols
                 self.assert_ne(bits.bits & 0xff000000, 0)?;
                 let mut n = bits.read_bits_no_refill(2 * (bits.leading_zeros() + 1)) - 2 + 1;
                 // Overflow
                 self.assert_le(sym + n, 256)?;
-                bits.refill(self);
+                bits.refill(self).at(self)?;
                 num_symbols += n;
                 loop {
                     // too big gamma value?
@@ -468,7 +474,7 @@ impl Core<'_> {
                     self.assert_le(1, codelen)?;
                     self.assert_le(codelen, 11)?;
                     avg_bits_x4 = codelen + ((3 * avg_bits_x4 + 2) >> 2);
-                    bits.refill(self);
+                    bits.refill(self).at(self)?;
                     syms[code_prefix[usize::try_from(codelen).unwrap()]] = sym as _;
                     code_prefix[usize::try_from(codelen).unwrap()] += 1;
                     sym += 1;
@@ -491,7 +497,7 @@ impl Core<'_> {
                 let codelen_bits = bits.read_bits_no_refill(3);
                 self.assert_le(codelen_bits, 4)?;
                 for _ in 0..num_symbols {
-                    bits.refill(self);
+                    bits.refill(self).at(self)?;
                     let sym = bits.read_bits_no_refill(8) as u8;
                     let codelen = bits.read_bits_no_refill_zero(codelen_bits) + 1;
                     assert!(codelen <= 11, "{}", codelen);
@@ -535,7 +541,7 @@ impl Core<'_> {
         bits.bitpos = 24;
         bits.p = br2.p;
         bits.bits = 0;
-        bits.refill(self);
+        bits.refill(self).at(self)?;
         bits.bits <<= br2.bitpos;
         bits.bitpos += br2.bitpos as i32;
 
@@ -629,7 +635,7 @@ impl Core<'_> {
         self.assert_lt(p, p_end)?;
 
         let mut count = -(br.bitpos as i32);
-        let mut v = self.get_as_usize(p) & (255 >> br.bitpos);
+        let mut v = (self.get_byte(p)? as usize) & (255 >> br.bitpos);
         p += 1;
         loop {
             if v == 0 {
@@ -655,7 +661,7 @@ impl Core<'_> {
                 count = x >> 28;
             }
             self.assert_lt(p, p_end)?;
-            v = self.get_byte(p) as _;
+            v = self.get_byte(p)? as _;
             p += 1;
         }
         // step back if byte not finished
@@ -748,7 +754,7 @@ impl Core<'_> {
 
         // Start with space?
         if p & 1 != 0 {
-            bits.refill(self);
+            bits.refill(self).at(self)?;
             let v = syms[symlen] as i32;
             symlen += 1;
             self.assert_lt(v, 8)?;
@@ -760,7 +766,7 @@ impl Core<'_> {
         let mut ranges: Vec<HuffRange> = Vec::with_capacity(num_ranges + 1);
 
         for _ in 0..num_ranges {
-            bits.refill(self);
+            bits.refill(self).at(self)?;
             let v = syms[symlen] as i32;
             symlen += 1;
             self.assert_lt(v, 9)?;
@@ -803,7 +809,7 @@ impl Core<'_> {
 
         self.assert_le(6, src_size)?;
 
-        let byte = self.get_as_usize(src);
+        let byte = self.get_byte(src)? as usize;
         let n = byte & 0x7f;
         self.assert_le(2, n)?;
 
@@ -868,7 +874,7 @@ impl Core<'_> {
         self.assert_le(4, (src_end - src)?)?;
 
         let mut decoded_size = 0;
-        let mut num_arrays_in_file = self.get_as_usize(src);
+        let mut num_arrays_in_file = self.get_byte(src)? as usize;
         src += 1;
         self.assert_ne(num_arrays_in_file & 0x80, 0)?;
         num_arrays_in_file &= 0x3f;
@@ -959,7 +965,7 @@ impl Core<'_> {
             src += n;
 
             for i in 0..num_indexes {
-                let t = self.get_byte(interval_indexes + i);
+                let t = self.get_byte(interval_indexes + i)?;
                 self.set(interval_lenlog2 + i, t >> 4);
                 self.set(interval_indexes + i, t & 0xF);
             }
@@ -998,7 +1004,7 @@ impl Core<'_> {
             src += n;
 
             for i in 0..lenlog2_chunksize {
-                self.assert_le(self.get_byte(interval_lenlog2 + i), 16)?;
+                self.assert_le(self.get_byte(interval_lenlog2 + i)?, 16)?;
             }
         }
 
@@ -1031,8 +1037,8 @@ impl Core<'_> {
             bits_b |= self.get_bytes_as_usize_le((b - 4)?, 4) as u32 >> (24 - bitpos_b);
             b -= (bitpos_b + 7) >> 3;
 
-            let numbits_f = self.get_byte(interval_lenlog2 + i + 0) as i32;
-            let numbits_b = self.get_byte(interval_lenlog2 + i + 1) as i32;
+            let numbits_f = self.get_byte(interval_lenlog2 + i + 0)? as i32;
+            let numbits_b = self.get_byte(interval_lenlog2 + i + 1)? as i32;
 
             bits_f = (bits_f | 1).rotate_left(numbits_f as _);
             bitpos_f += numbits_f - 8 * ((bitpos_f + 7) >> 3);
@@ -1053,16 +1059,13 @@ impl Core<'_> {
         // read final one since above loop reads 2
         if (num_lens & 1) == 1 {
             bits_f |= self.get_bytes_as_usize_be(f, 4) as u32 >> (24 - bitpos_f);
-            let numbits_f = self.get_byte((interval_lenlog2 + num_lens - 1)?);
+            let numbits_f = self.get_byte((interval_lenlog2 + num_lens - 1)?)?;
             bits_f = (bits_f | 1).rotate_left(numbits_f as _);
             let value_f = bits_f & BITMASKS[numbits_f as usize];
             decoded_intervals.push(value_f);
         }
 
-        self.assert(
-            !self.get_as_bool((interval_indexes + num_indexes - 1)?),
-            "Bad data",
-        )?;
+        self.assert_eq(self.get_byte((interval_indexes + num_indexes - 1)?)?, 0)?;
 
         let mut indi = 0;
         let mut leni = 0;
@@ -1074,7 +1077,7 @@ impl Core<'_> {
             self.assert_lt(indi, num_indexes)?;
 
             loop {
-                let source = self.get_as_usize(interval_indexes + indi);
+                let source = self.get_byte(interval_indexes + indi)? as usize;
                 indi += 1;
                 if source == 0 {
                     break;
@@ -1118,9 +1121,9 @@ impl Core<'_> {
         let src_size;
         let dst_size;
 
-        let chunk_type = (self.get_byte(src) >> 4) & 0x7;
+        let chunk_type = (self.get_byte(src)? >> 4) & 0x7;
         if chunk_type == 0 {
-            if self.get_byte(src) >= 0x80 {
+            if self.get_byte(src)? >= 0x80 {
                 // In this mode, memcopy stores the length in the bottom 12 bits.
                 src_size = self.get_bytes_as_usize_be(src, 2) & 0xFFF;
                 src += 2;
@@ -1138,7 +1141,7 @@ impl Core<'_> {
 
         // In all the other modes, the initial bytes encode
         // the src_size and the dst_size
-        if self.get_byte(src) >= 0x80 {
+        if self.get_byte(src)? >= 0x80 {
             // short mode, 10 bit sizes
             let bits = self.get_bytes_as_usize_be(src, 3);
             src_size = bits & 0x3ff;
@@ -1149,7 +1152,7 @@ impl Core<'_> {
             // no test coverage
             let bits = self.get_bytes_as_usize_be(src, 5);
             src_size = bits & 0x3ffff;
-            dst_size = (((bits >> 18) | (self.get_as_usize(src) << 14)) & 0x3FFFF) + 1;
+            dst_size = (((bits >> 18) | ((self.get_byte(src)? as usize) << 14)) & 0x3FFFF) + 1;
             self.assert_lt(dst_size, src_size)?;
             src += 5;
         }
@@ -1168,14 +1171,14 @@ impl Core<'_> {
     ) -> Result<usize, OozError> {
         self.assert_ne(src_size, 0)?;
         if src_size == 1 {
-            self.memset(dst, self.get_byte(src), dst_size);
+            self.memset(dst, self.get_byte(src)?, dst_size);
             return Ok(1);
         }
         let dst_end = dst + dst_size;
         let mut cmd_ptr = src + 1;
         let mut cmd_ptr_end = src + src_size;
         // Unpack the first X bytes of the command buffer?
-        if self.get_as_bool(src) {
+        if self.get_byte(src)? != 0 {
             let mut dst_ptr = scratch;
             let mut dec_size = 0;
             let n = self
@@ -1199,7 +1202,7 @@ impl Core<'_> {
         let mut rle_byte = 0;
 
         while cmd_ptr < cmd_ptr_end {
-            let cmd = self.get_as_usize((cmd_ptr_end - 1)?);
+            let cmd = self.get_byte((cmd_ptr_end - 1)?)? as usize;
             if cmd == 0 || cmd > 0x2f {
                 cmd_ptr_end -= 1;
                 let bytes_to_copy = !cmd & 0xF;
@@ -1224,7 +1227,7 @@ impl Core<'_> {
                 self.memset(dst, rle_byte, bytes_to_rle);
                 dst += bytes_to_rle;
             } else if cmd == 1 {
-                rle_byte = self.get_byte(cmd_ptr);
+                rle_byte = self.get_byte(cmd_ptr)?;
                 cmd_ptr += 1;
                 cmd_ptr_end -= 1;
             } else if cmd >= 9 {
@@ -1268,19 +1271,19 @@ impl Core<'_> {
             p: src,
             p_end: src_end,
         };
-        br.refill(self);
+        br.refill(self).at(self)?;
 
         self.assert(!br.read_bit_no_refill(), "reserved bit")?;
 
         let l_bits = br.read_bits_no_refill(2) + 8;
 
-        let tans_data = TansDecoder::decode_table(self, &mut br, l_bits).at(self)?;
+        let mut decoder = TansDecoder::default();
+        let tans_data = decoder.decode_table(self, &mut br, l_bits).at(self)?;
 
         src = (br.p - (24 - br.bitpos) / 8)?;
 
         self.assert_lt(src, src_end)?;
 
-        let mut decoder = TansDecoder::default();
         decoder.dst = dst;
         decoder.dst_end = (dst + dst_size - 5)?;
 

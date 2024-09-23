@@ -79,10 +79,10 @@ impl KrakenLzTable {
             src += 8;
         }
 
-        if core.get_as_usize(src) & 0x80 != 0 {
-            let flag = core.get_as_usize(src);
+        let flag = core.get_byte(src).at(self)? as usize;
+        if flag & 0x80 != 0 {
             src += 1;
-            assert_eq!(flag & 0xc0, 0x80, "reserved flag set");
+            assert_eq!(flag & 0xc0, 0x80, "reserved flag set {:X}", flag);
             // fail anyway...
             panic!("excess bytes not supported");
         }
@@ -132,10 +132,10 @@ impl KrakenLzTable {
         let mut offs_scaling = 0;
         let mut packed_offs_stream_extra = Pointer::null();
 
-        if core.get_as_usize(src) & 0x80 != 0 {
+        if (core.get_byte(src).at(self)? as usize) & 0x80 != 0 {
             // uses the mode where distances are coded with 2 tables
             // no test coverage for this branch.
-            offs_scaling = i32::from(core.get_byte(src)) - 127;
+            offs_scaling = i32::from(core.get_byte(src).at(self)?) - 127;
             src += 1;
 
             packed_offs_stream = scratch;
@@ -264,7 +264,7 @@ impl KrakenLzTable {
         last_offset = -8;
 
         while cmd_stream < cmd_stream_end {
-            let f = core.get_as_usize(cmd_stream);
+            let f = core.get_byte(cmd_stream).at(self)? as usize;
             cmd_stream += 1;
             let mut litlen = f & 3;
             let offs_index = f >> 6;
@@ -287,7 +287,8 @@ impl KrakenLzTable {
             recent_offs[6] = core.get_int(offs_stream);
 
             if mode == 0 {
-                core.copy_64_add(dst, lit_stream, dst + last_offset, litlen);
+                core.copy_64_add(dst, lit_stream, dst + last_offset, litlen)
+                    .at(self)?;
             } else {
                 core.memmove(dst, lit_stream, litlen);
             }
@@ -324,7 +325,8 @@ impl KrakenLzTable {
         self.assert_eq(final_len, (lit_stream_end - lit_stream)?)?;
 
         if mode == 0 {
-            core.copy_64_add(dst, lit_stream, dst + last_offset, final_len);
+            core.copy_64_add(dst, lit_stream, dst + last_offset, final_len)
+                .at(self)?;
         } else {
             core.memmove(dst, lit_stream, final_len);
         }

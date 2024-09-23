@@ -1,5 +1,5 @@
 use crate::core::Core;
-use crate::error::{ErrorBuilder, ErrorContext, ResultBuilder, WithContext};
+use crate::error::{ErrorBuilder, ErrorContext, OozError, ResultBuilder, WithContext};
 use std::fmt::{Display, Formatter};
 use std::mem::size_of;
 
@@ -272,20 +272,17 @@ impl From<IntPointer> for Pointer {
 }
 
 impl Core<'_> {
-    pub fn get_byte(&self, p: Pointer) -> u8 {
+    pub fn get_byte(&self, p: Pointer) -> Result<u8, OozError> {
         match p.into {
             PointerDest::Null => panic!(),
-            PointerDest::Input => self.input[p.index],
-            PointerDest::Output => self.output[p.index],
-            PointerDest::Scratch => self.scratch[p.index],
-            PointerDest::Temp => self.tmp[p.index],
+            PointerDest::Input => self.input.get(p.index),
+            PointerDest::Output => self.output.get(p.index),
+            PointerDest::Scratch => self.scratch.get(p.index),
+            PointerDest::Temp => self.tmp.get(p.index),
         }
-    }
-    pub fn get_as_usize(&self, p: Pointer) -> usize {
-        self.get_byte(p) as usize
-    }
-    pub fn get_as_bool(&self, p: Pointer) -> bool {
-        self.get_byte(p) != 0
+        .map(|&v| v)
+        .message(|_| format!("{}", p))
+        .build()
     }
     pub fn get_slice(&mut self, p: Pointer, n: usize) -> &[u8] {
         match p.into {
@@ -414,13 +411,21 @@ impl Core<'_> {
         }
     }
 
-    pub fn copy_64_add(&mut self, dest: Pointer, lhs: Pointer, rhs: Pointer, n: usize) {
+    pub fn copy_64_add(
+        &mut self,
+        dest: Pointer,
+        lhs: Pointer,
+        rhs: Pointer,
+        n: usize,
+    ) -> Result<(), OozError> {
         for i in 0..n {
             self.set(
                 dest + i,
-                self.get_byte(lhs + i).wrapping_add(self.get_byte(rhs + i)),
+                self.get_byte(lhs + i)?
+                    .wrapping_add(self.get_byte(rhs + i)?),
             )
         }
+        Ok(())
     }
 
     pub fn memcpy(&mut self, dest: Pointer, src: Pointer, n: usize) {

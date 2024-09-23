@@ -59,6 +59,7 @@ pub(crate) struct ErrorBuilder {
 
 pub trait ResultBuilder<T> {
     fn message<F: FnOnce(Option<&str>) -> String>(self, msg: F) -> Result<T, ErrorBuilder>;
+    fn build(self) -> Result<T, OozError>;
 }
 
 impl<T> ResultBuilder<T> for Result<T, ErrorBuilder> {
@@ -68,11 +69,36 @@ impl<T> ResultBuilder<T> for Result<T, ErrorBuilder> {
             ErrorBuilder { message, ..e }
         })
     }
+
+    #[track_caller]
+    fn build(self) -> Result<T, OozError> {
+        self.map_err(
+            |ErrorBuilder {
+                 message,
+                 context,
+                 source,
+             }| OozError {
+                message,
+                context,
+                source,
+                location: Location::caller(),
+            },
+        )
+    }
 }
 
 impl<T> ResultBuilder<T> for Option<T> {
     fn message<F: FnOnce(Option<&str>) -> String>(self, msg: F) -> Result<T, ErrorBuilder> {
         self.ok_or_else(ErrorBuilder::default).message(msg)
+    }
+    #[track_caller]
+    fn build(self) -> Result<T, OozError> {
+        self.ok_or_else(|| OozError {
+            message: None,
+            context: None,
+            source: None,
+            location: Location::caller(),
+        })
     }
 }
 
