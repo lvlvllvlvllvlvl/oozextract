@@ -190,7 +190,7 @@ impl MermaidLzTable {
                     core.copy_64_add(dst, lit_stream, dst + recent_offs, litlen)
                         .at(self)?;
                 } else {
-                    core.repeat_copy_64(dst, lit_stream, litlen);
+                    core.repeat_copy_64(dst, lit_stream, litlen).at(self)?;
                 }
                 dst += litlen;
                 lit_stream += litlen;
@@ -198,7 +198,8 @@ impl MermaidLzTable {
                     recent_offs = -(self.off16_stream.pop_front().unwrap() as i32);
                 }
                 offs_ptr = dst + recent_offs;
-                core.repeat_copy_64(dst, offs_ptr, (cmd >> 3) & 0xF);
+                core.repeat_copy_64(dst, offs_ptr, (cmd >> 3) & 0xF)
+                    .at(self)?;
                 dst += (cmd >> 3) & 0xF;
             } else if cmd > 2 {
                 length = cmd + 5;
@@ -209,7 +210,7 @@ impl MermaidLzTable {
                 recent_offs = offs_ptr.index as i32 - dst.index as i32;
 
                 assert!((dst_end - dst)? >= length);
-                core.repeat_copy_64(dst, offs_ptr, length);
+                core.repeat_copy_64(dst, offs_ptr, length).at(self)?;
                 dst += length;
                 //simde_mm_prefetch((char*)dst_begin - off32_stream[3], SIMDE_MM_HINT_T0);
             } else if cmd == 0 {
@@ -229,7 +230,7 @@ impl MermaidLzTable {
                     core.copy_64_add(dst, lit_stream, dst + recent_offs, length)
                         .at(self)?;
                 } else {
-                    core.repeat_copy_64(dst, lit_stream, length);
+                    core.repeat_copy_64(dst, lit_stream, length).at(self)?;
                 }
                 dst += length;
                 lit_stream += length;
@@ -251,7 +252,7 @@ impl MermaidLzTable {
                         .message(|_| "offset_stream_empty".into())?
                         as usize)?;
                 recent_offs = offs_ptr.index as i32 - dst.index as i32;
-                core.repeat_copy_64(dst, offs_ptr, length);
+                core.repeat_copy_64(dst, offs_ptr, length).at(self)?;
                 dst += length;
             } else {
                 /* flag == 2 */
@@ -268,7 +269,7 @@ impl MermaidLzTable {
                 offs_ptr = (dst_begin - self.off32()[off32_stream])?;
                 off32_stream += 1;
                 recent_offs = offs_ptr.index as i32 - dst.index as i32;
-                core.repeat_copy_64(dst, offs_ptr, length);
+                core.repeat_copy_64(dst, offs_ptr, length).at(self)?;
                 dst += length;
                 //simde_mm_prefetch((char*)dst_begin - off32_stream[3], SIMDE_MM_HINT_T0);
             }
@@ -279,7 +280,7 @@ impl MermaidLzTable {
             core.copy_64_add(dst, lit_stream, dst + recent_offs, length)
                 .at(self)?;
         } else {
-            core.repeat_copy_64(dst, lit_stream, length);
+            core.repeat_copy_64(dst, lit_stream, length).at(self)?;
         }
         lit_stream += length;
 
@@ -311,7 +312,7 @@ impl MermaidLzTable {
         assert!((src_end - src)? >= 10);
 
         if offset == 0 {
-            core.memmove(dst, src, 8);
+            core.copy_bytes(dst, src, 8).at(self)?;
             dst += 8;
             src += 8;
         }

@@ -82,7 +82,7 @@ impl Core<'_> {
                     ))?;
                 } else {
                     log::debug!("copying {} bytes", dst_count);
-                    self.memmove(self.dst, self.src, dst_count);
+                    self.copy_bytes(self.dst, self.src, dst_count).at(self)?;
                 }
             }
             self.src += src_used;
@@ -147,7 +147,7 @@ impl Core<'_> {
                 let d_a = bits_a
                     .read_distance(self, self.get_byte(packed_offs_stream)?.into())
                     .at(self)?;
-                self.set_int(offs_stream, -d_a);
+                self.set_int(offs_stream, -d_a).at(self)?;
                 offs_stream += 1;
                 packed_offs_stream += 1;
                 if packed_offs_stream == packed_offs_stream_end {
@@ -156,7 +156,7 @@ impl Core<'_> {
                 let d_b = bits_b
                     .read_distance_b(self, self.get_byte(packed_offs_stream)?.into())
                     .at(self)?;
-                self.set_int(offs_stream, -d_b);
+                self.set_int(offs_stream, -d_b).at(self)?;
                 offs_stream += 1;
                 packed_offs_stream += 1;
             }
@@ -171,7 +171,7 @@ impl Core<'_> {
                 self.assert_le(cmd >> 3, 26)?;
                 offs = ((8 + (cmd & 7)) << (cmd >> 3))
                     | bits_a.read_more_than24bits(self, cmd >> 3).at(self)?;
-                self.set_int(offs_stream, 8 - offs);
+                self.set_int(offs_stream, 8 - offs).at(self)?;
                 offs_stream += 1;
                 if packed_offs_stream == packed_offs_stream_end {
                     break;
@@ -181,7 +181,7 @@ impl Core<'_> {
                 self.assert_le(cmd >> 3, 26)?;
                 offs = ((8 + (cmd & 7)) << (cmd >> 3))
                     | bits_b.read_more_than_24_bits_b(self, cmd >> 3).at(self)?;
-                self.set_int(offs_stream, 8 - offs);
+                self.set_int(offs_stream, 8 - offs).at(self)?;
                 offs_stream += 1;
             }
             if multi_dist_scale != 1 {
@@ -221,7 +221,7 @@ impl Core<'_> {
                 v = u32_len_stream_buf[u32_len_stream] + 255;
                 u32_len_stream += 1;
             }
-            self.set_int(len_stream + i, (v + 3) as i32);
+            self.set_int(len_stream + i, (v + 3) as i32).at(self)?;
         }
         self.assert_eq(u32_len_stream, u32_len_stream_size)?;
         Ok(())
@@ -237,7 +237,7 @@ impl Core<'_> {
         for i in 0..offs_stream_size {
             let low = self.get_byte(low_bits + i)? as i32;
             let scaled = scale * self.get_int(offs_stream + i).at(self)? - low;
-            self.set_int(offs_stream + i, scaled)
+            self.set_int(offs_stream + i, scaled).at(self)?
         }
         Ok(())
     }
@@ -277,7 +277,7 @@ impl Core<'_> {
             self.assert_le(src_size, (src_end - src)?)?;
             *decoded_size = src_size;
             if force_memmove {
-                self.memmove(*output, src, src_size);
+                self.copy_bytes(*output, src, src_size).at(self)?;
             } else {
                 *output = src;
             }
@@ -367,7 +367,7 @@ impl Core<'_> {
 
         if num_syms == 1 {
             // no test coverage
-            self.memset(output, syms[0], output_size);
+            self.memset(output, syms[0], output_size).at(self)?;
             return Ok((src - src_end)?);
         }
 
@@ -963,8 +963,8 @@ impl Core<'_> {
 
             for i in 0..num_indexes {
                 let t = self.get_byte(interval_indexes + i)?;
-                self.set(interval_lenlog2 + i, t >> 4);
-                self.set(interval_indexes + i, t & 0xF);
+                self.set(interval_lenlog2 + i, t >> 4).at(self)?;
+                self.set(interval_indexes + i, t & 0xF).at(self)?;
             }
 
             num_lens = num_indexes;
@@ -1089,7 +1089,7 @@ impl Core<'_> {
                 let blksrc = entropy_array_data[source - 1];
                 entropy_array_size[source - 1] -= cur_len;
                 entropy_array_data[source - 1] += cur_len;
-                self.memcpy(dst, blksrc, cur_len);
+                self.copy_bytes(dst, blksrc, cur_len).at(self)?;
                 dst += cur_len;
             }
             if increment_leni {
@@ -1168,7 +1168,7 @@ impl Core<'_> {
     ) -> Res<usize> {
         self.assert_ne(src_size, 0)?;
         if src_size == 1 {
-            self.memset(dst, self.get_byte(src)?, dst_size);
+            self.memset(dst, self.get_byte(src)?, dst_size).at(self)?;
             return Ok(1);
         }
         let dst_end = dst + dst_size;
@@ -1191,7 +1191,8 @@ impl Core<'_> {
                 .at(self)?;
             self.assert_lt(0, n)?;
             let cmd_len = src_size - n + dec_size;
-            self.memcpy(dst_ptr + dec_size, src + n, src_size - n);
+            self.copy_bytes(dst_ptr + dec_size, src + n, src_size - n)
+                .at(self)?;
             cmd_ptr = dst_ptr;
             cmd_ptr_end = dst_ptr + cmd_len;
         }
@@ -1206,10 +1207,10 @@ impl Core<'_> {
                 let bytes_to_rle = cmd >> 4;
                 self.assert_le(bytes_to_copy + bytes_to_rle, (dst_end - dst)?)?;
                 self.assert_le(bytes_to_copy, (cmd_ptr_end - cmd_ptr)?)?;
-                self.memcpy(dst, cmd_ptr, bytes_to_copy);
+                self.copy_bytes(dst, cmd_ptr, bytes_to_copy).at(self)?;
                 cmd_ptr += bytes_to_copy;
                 dst += bytes_to_copy;
-                self.memset(dst, rle_byte, bytes_to_rle);
+                self.memset(dst, rle_byte, bytes_to_rle).at(self)?;
                 dst += bytes_to_rle;
             } else if cmd >= 0x10 {
                 cmd_ptr_end -= 2;
@@ -1218,10 +1219,10 @@ impl Core<'_> {
                 let bytes_to_rle = data >> 6;
                 self.assert_le(bytes_to_copy + bytes_to_rle, (dst_end - dst)?)?;
                 self.assert_le(bytes_to_copy, (cmd_ptr_end - cmd_ptr)?)?;
-                self.memcpy(dst, cmd_ptr, bytes_to_copy);
+                self.copy_bytes(dst, cmd_ptr, bytes_to_copy).at(self)?;
                 cmd_ptr += bytes_to_copy;
                 dst += bytes_to_copy;
-                self.memset(dst, rle_byte, bytes_to_rle);
+                self.memset(dst, rle_byte, bytes_to_rle).at(self)?;
                 dst += bytes_to_rle;
             } else if cmd == 1 {
                 rle_byte = self.get_byte(cmd_ptr)?;
@@ -1231,14 +1232,14 @@ impl Core<'_> {
                 cmd_ptr_end -= 2;
                 let bytes_to_rle = (self.get_le_bytes(cmd_ptr_end, 2).at(self)? - 0x8ff) * 128;
                 self.assert_le(bytes_to_rle, (dst_end - dst)?)?;
-                self.memset(dst, rle_byte, bytes_to_rle);
+                self.memset(dst, rle_byte, bytes_to_rle).at(self)?;
                 dst += bytes_to_rle;
             } else {
                 cmd_ptr_end -= 2;
                 let bytes_to_copy = (self.get_le_bytes(cmd_ptr_end, 2).at(self)? - 511) * 64;
                 self.assert_le(bytes_to_copy, (cmd_ptr_end - cmd_ptr)?)?;
                 self.assert_le(bytes_to_copy, (dst_end - dst)?)?;
-                self.memcpy(dst, cmd_ptr, bytes_to_copy);
+                self.copy_bytes(dst, cmd_ptr, bytes_to_copy).at(self)?;
                 dst += bytes_to_copy;
                 cmd_ptr += bytes_to_copy;
             }

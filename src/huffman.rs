@@ -71,37 +71,37 @@ impl HuffReader {
                 n = lut.bits2len[k];
                 src_bits >>= n as u32;
                 src_bitpos -= n as i32;
-                core.set(dst + 0, lut.bits2sym[k]);
+                core.set(dst + 0, lut.bits2sym[k]).at(self)?;
 
                 k = (src_end_bits & 0x7FF) as _;
                 n = lut.bits2len[k];
                 src_end_bits >>= n as u32;
                 src_end_bitpos -= n as i32;
-                core.set(dst + 1, lut.bits2sym[k]);
+                core.set(dst + 1, lut.bits2sym[k]).at(self)?;
 
                 k = (src_mid_bits & 0x7FF) as _;
                 n = lut.bits2len[k];
                 src_mid_bits >>= n as u32;
                 src_mid_bitpos -= n as i32;
-                core.set(dst + 2, lut.bits2sym[k]);
+                core.set(dst + 2, lut.bits2sym[k]).at(self)?;
 
                 k = (src_bits & 0x7FF) as _;
                 n = lut.bits2len[k];
                 src_bits >>= n as u32;
                 src_bitpos -= n as i32;
-                core.set(dst + 3, lut.bits2sym[k]);
+                core.set(dst + 3, lut.bits2sym[k]).at(self)?;
 
                 k = (src_end_bits & 0x7FF) as _;
                 n = lut.bits2len[k];
                 src_end_bits >>= n as u32;
                 src_end_bitpos -= n as i32;
-                core.set(dst + 4, lut.bits2sym[k]);
+                core.set(dst + 4, lut.bits2sym[k]).at(self)?;
 
                 k = (src_mid_bits & 0x7FF) as _;
                 n = lut.bits2len[k];
                 src_mid_bits >>= n as u32;
                 src_mid_bitpos -= n as i32;
-                core.set(dst + 5, lut.bits2sym[k]);
+                core.set(dst + 5, lut.bits2sym[k]).at(self)?;
                 dst += 6;
             }
             dst_end += 5;
@@ -128,7 +128,7 @@ impl HuffReader {
             n = lut.bits2len[k];
             src_bitpos -= n as i32;
             src_bits >>= n as u32;
-            core.set(dst, lut.bits2sym[k]);
+            core.set(dst, lut.bits2sym[k]).at(self)?;
             dst += 1;
             src += (7 - src_bitpos) >> 3;
             src_bitpos &= 7;
@@ -147,7 +147,8 @@ impl HuffReader {
                         (core.get_le_bytes(src_mid, 2).at(self)? as u32) << src_mid_bitpos;
                 }
                 n = lut.bits2len[(src_end_bits & 0x7FF) as usize];
-                core.set(dst, lut.bits2sym[(src_end_bits & 0x7FF) as usize]);
+                core.set(dst, lut.bits2sym[(src_end_bits & 0x7FF) as usize])
+                    .at(self)?;
                 dst += 1;
                 src_end_bitpos -= n as i32;
                 src_end_bits >>= n as u32;
@@ -155,7 +156,8 @@ impl HuffReader {
                 src_end_bitpos &= 7;
                 if dst < dst_end {
                     n = lut.bits2len[(src_mid_bits & 0x7FF) as usize];
-                    core.set(dst, lut.bits2sym[(src_mid_bits & 0x7FF) as usize]);
+                    core.set(dst, lut.bits2sym[(src_mid_bits & 0x7FF) as usize])
+                        .at(self)?;
                     dst += 1;
                     src_mid_bitpos -= n as i32;
                     src_mid_bits >>= n as u32;

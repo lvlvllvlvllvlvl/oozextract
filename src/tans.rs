@@ -52,7 +52,8 @@ impl TansDecoder {
         let states_or = self.state.iter().fold(0, |l, &r| l | r);
         assert_eq!(states_or & !0xFF, 0, "{:X}", states_or);
 
-        core.set_bytes(self.dst_end, &self.state.map(|s| s as u8));
+        core.set_bytes(self.dst_end, &self.state.map(|s| s as u8))
+            .at(self)?;
         Ok(())
     }
 
@@ -64,12 +65,17 @@ impl TansDecoder {
     }
 
     fn tans_forward_round(&mut self, core: &mut Core, i: usize) -> Res<()> {
-        let e = &self.lut[self.state[i]];
-        core.set(self.dst, e.symbol);
+        let &TansLutEnt {
+            symbol,
+            bits_x,
+            x,
+            w,
+        } = &self.lut[self.state[i]];
+        core.set(self.dst, symbol).at(self)?;
         self.dst += 1;
-        self.bitpos_f -= e.bits_x as i32;
-        self.state[i] = (self.bits_f & e.x as usize) + e.w as usize;
-        self.bits_f >>= e.bits_x;
+        self.bitpos_f -= bits_x as i32;
+        self.state[i] = (self.bits_f & x as usize) + w as usize;
+        self.bits_f >>= bits_x;
         Ok(())
     }
 
@@ -81,12 +87,17 @@ impl TansDecoder {
     }
 
     fn tans_backward_round(&mut self, core: &mut Core, i: usize) -> Res<()> {
-        let e = &self.lut[self.state[i]];
-        core.set(self.dst, e.symbol);
+        let &TansLutEnt {
+            symbol,
+            bits_x,
+            x,
+            w,
+        } = &self.lut[self.state[i]];
+        core.set(self.dst, symbol).at(self)?;
         self.dst += 1;
-        self.bitpos_b -= e.bits_x as i32;
-        self.state[i] = (self.bits_b & e.x as usize) + e.w as usize;
-        self.bits_b >>= e.bits_x;
+        self.bitpos_b -= bits_x as i32;
+        self.state[i] = (self.bits_b & x as usize) + w as usize;
+        self.bits_b >>= bits_x;
         Ok(())
     }
 

@@ -74,7 +74,7 @@ impl KrakenLzTable {
         assert!((src_end - src)? >= 13, "{:?} {:?}", src_end, src);
 
         if offset == 0 {
-            core.memmove(dst, src, 8);
+            core.copy_bytes(dst, src, 8).at(self)?;
             dst += 8;
             src += 8;
         }
@@ -290,7 +290,7 @@ impl KrakenLzTable {
                 core.copy_64_add(dst, lit_stream, dst + last_offset, litlen)
                     .at(self)?;
             } else {
-                core.memmove(dst, lit_stream, litlen);
+                core.copy_bytes(dst, lit_stream, litlen).at(self)?;
             }
             dst += litlen;
             lit_stream += litlen;
@@ -306,7 +306,7 @@ impl KrakenLzTable {
 
             copyfrom = dst + offset;
             if matchlen != 15 {
-                core.repeat_copy_64(dst, copyfrom, matchlen + 2);
+                core.repeat_copy_64(dst, copyfrom, matchlen + 2).at(self)?;
                 dst += matchlen + 2;
             } else {
                 // why is the value not 16 here, the above case copies up to 16 bytes.
@@ -314,7 +314,7 @@ impl KrakenLzTable {
                     .try_into()
                     .unwrap();
                 len_stream += 1;
-                core.repeat_copy_64(dst, copyfrom, matchlen);
+                core.repeat_copy_64(dst, copyfrom, matchlen).at(self)?;
                 dst += matchlen;
             }
         }
@@ -330,7 +330,7 @@ impl KrakenLzTable {
             core.copy_64_add(dst, lit_stream, dst + last_offset, final_len)
                 .at(self)?;
         } else {
-            core.memmove(dst, lit_stream, final_len);
+            core.copy_bytes(dst, lit_stream, final_len).at(self)?;
         }
         Ok(())
     }

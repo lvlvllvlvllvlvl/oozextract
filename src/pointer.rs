@@ -329,87 +329,91 @@ impl Core<'_> {
         }
     }
 
-    pub fn set(&mut self, p: Pointer, v: u8) {
+    pub fn set(&mut self, p: Pointer, v: u8) -> Res<()> {
         p.debug(1);
-        match p.into {
-            PointerDest::Null => panic!(),
-            PointerDest::Input => panic!(),
-            PointerDest::Output => self.output[p.index] = v,
+        let dest = match p.into {
+            PointerDest::Null => None,
+            PointerDest::Input => None,
+            PointerDest::Output => self.output.get_mut(p.index),
             PointerDest::Scratch => {
                 self.ensure_scratch(p.index + 1);
-                self.scratch[p.index] = v
+                self.scratch.get_mut(p.index)
             }
             PointerDest::Temp => {
                 self.ensure_tmp(p.index + 1);
-                self.tmp[p.index] = v
+                self.tmp.get_mut(p.index)
             }
         }
+        .message(|_| format!("Setting byte at {}", p))?;
+        *dest = v;
+        Ok(())
     }
 
-    pub fn set_int(&mut self, p: IntPointer, v: i32) {
+    pub fn set_int(&mut self, p: IntPointer, v: i32) -> Res<()> {
         Pointer::from(p).debug(4);
         match p.into {
-            PointerDest::Null => panic!(),
-            PointerDest::Input => panic!(),
-            PointerDest::Output => {
-                self.output[p.index..p.index + 4].copy_from_slice(&v.to_le_bytes())
-            }
+            PointerDest::Null => None,
+            PointerDest::Input => None,
+            PointerDest::Output => self.output.get_mut(p.index..p.index + 4),
             PointerDest::Scratch => {
                 self.ensure_scratch(p.index + 4);
-                self.scratch[p.index..p.index + 4].copy_from_slice(&v.to_le_bytes())
+                self.scratch.get_mut(p.index..p.index + 4)
             }
             PointerDest::Temp => {
                 self.ensure_tmp(p.index + 4);
-                self.tmp[p.index..p.index + 4].copy_from_slice(&v.to_le_bytes())
+                self.tmp.get_mut(p.index..p.index + 4)
             }
         }
+        .message(|_| format!("Writing i32 to {}", p))?
+        .copy_from_slice(&v.to_le_bytes());
+        Ok(())
     }
 
-    pub fn set_bytes(&mut self, p: Pointer, v: &[u8]) {
+    pub fn set_bytes(&mut self, p: Pointer, v: &[u8]) -> Res<()> {
         p.debug(v.len());
         match p.into {
-            PointerDest::Null => panic!(),
-            PointerDest::Input => panic!(),
-            PointerDest::Output => self.output[p.index..p.index + v.len()].copy_from_slice(v),
+            PointerDest::Null => None,
+            PointerDest::Input => None,
+            PointerDest::Output => self.output.get_mut(p.index..p.index + v.len()),
             PointerDest::Scratch => {
                 self.ensure_scratch(p.index + v.len());
-                self.scratch[p.index..p.index + v.len()].copy_from_slice(v)
+                self.scratch.get_mut(p.index..p.index + v.len())
             }
             PointerDest::Temp => {
                 self.ensure_tmp(p.index + v.len());
-                self.tmp[p.index..p.index + v.len()].copy_from_slice(v)
+                self.tmp.get_mut(p.index..p.index + v.len())
             }
         }
+        .message(|_| format!("Writing {} bytes to {}", v.len(), p))?
+        .copy_from_slice(v);
+        Ok(())
     }
 
     /// copies 8 bytes at a time from src into dest, including previously copied bytes if ranges overlap
-    pub fn repeat_copy_64(&mut self, dest: Pointer, src: Pointer, bytes: usize) {
-        if dest.into != src.into {
-            self.memmove(dest, src, bytes);
+    pub fn repeat_copy_64(&mut self, dest: Pointer, src: Pointer, bytes: usize) -> Res<()> {
+        if dest.into != src.into || bytes < src.index.abs_diff(dest.index) {
+            self.copy_bytes(dest, src, bytes)
         } else {
             dest.debug(bytes);
             let buf: &mut [u8] = match dest.into {
-                PointerDest::Null => panic!(),
-                PointerDest::Input => panic!(),
+                PointerDest::Null => self.raise(format!("{}", dest))?,
+                PointerDest::Input => self.raise(format!("{}", dest))?,
                 PointerDest::Output => self.output,
-                PointerDest::Scratch => {
-                    self.ensure_scratch(dest.index + bytes);
-                    &mut self.scratch
-                }
-                PointerDest::Temp => {
-                    self.ensure_tmp(dest.index + bytes);
-                    &mut self.tmp
-                }
+                PointerDest::Scratch => &mut self.scratch,
+                PointerDest::Temp => &mut self.tmp,
             };
-            if bytes < src.index.abs_diff(dest.index) {
-                buf.copy_within(src.index..src.index + bytes, dest.index);
-                return;
+            if src.index.max(dest.index) + bytes > buf.len() {
+                Err(ErrorBuilder {
+                    message: Some(format!("{}, {}, {}, {}", bytes, src, dest, buf.len())),
+                    ..Default::default()
+                })?
             }
             let mut n = 0;
             while n < bytes {
                 buf.copy_within(src.index + n..src.index + bytes.min(n + 8), dest.index + n);
                 n += 8;
             }
+            Ok(())
         }
     }
 
@@ -420,78 +424,93 @@ impl Core<'_> {
                 self.get_byte(lhs + i)?
                     .wrapping_add(self.get_byte(rhs + i)?),
             )
+            .at(self)?
         }
         Ok(())
     }
 
-    pub fn memcpy(&mut self, dest: Pointer, src: Pointer, n: usize) {
-        self.memmove(dest, src, n)
-    }
-
-    pub fn memmove(&mut self, dest: Pointer, src: Pointer, n: usize) {
+    pub fn copy_bytes(&mut self, dest: Pointer, src: Pointer, n: usize) -> Res<()> {
         dest.debug(n);
+        let req_len = src.index.max(dest.index) + n;
         if dest.into == src.into {
             if dest.index != src.index {
                 match dest.into {
-                    PointerDest::Null => panic!(),
-                    PointerDest::Input => panic!(),
-                    PointerDest::Output => self
-                        .output
-                        .copy_within(src.index..src.index + n, dest.index),
+                    PointerDest::Null => Err(ErrorBuilder::default())?,
+                    PointerDest::Input => Err(ErrorBuilder::default())?,
+                    PointerDest::Output => {
+                        self.assert_le(req_len, self.output.len())?;
+                        self.output
+                            .copy_within(src.index..src.index + n, dest.index)
+                    }
                     PointerDest::Scratch => {
-                        self.ensure_scratch(dest.index + n);
+                        self.ensure_scratch(req_len);
                         self.scratch
                             .copy_within(src.index..src.index + n, dest.index)
                     }
                     PointerDest::Temp => {
-                        self.ensure_tmp(dest.index + n);
+                        self.ensure_tmp(req_len);
                         self.tmp.copy_within(src.index..src.index + n, dest.index)
                     }
                 }
             }
         } else {
             match dest.into {
-                PointerDest::Null => panic!(),
-                PointerDest::Input => panic!(),
-                PointerDest::Output => {
-                    self.output[dest.index..dest.index + n].copy_from_slice(match src.into {
-                        PointerDest::Null => panic!(),
-                        PointerDest::Input => &self.input[src.index..src.index + n],
-                        PointerDest::Output => panic!(),
-                        PointerDest::Scratch => &self.scratch[src.index..src.index + n],
-                        PointerDest::Temp => &self.tmp[src.index..src.index + n],
-                    })
-                }
+                PointerDest::Null => Err(ErrorBuilder::default())?,
+                PointerDest::Input => Err(ErrorBuilder::default())?,
+                PointerDest::Output => self
+                    .output
+                    .get_mut(dest.index..dest.index + n)
+                    .message(|_| format!("{}, {}", dest, n))?
+                    .copy_from_slice(
+                        match src.into {
+                            PointerDest::Null => None,
+                            PointerDest::Input => self.input.get(src.index..src.index + n),
+                            PointerDest::Output => None,
+                            PointerDest::Scratch => self.scratch.get(src.index..src.index + n),
+                            PointerDest::Temp => self.tmp.get(src.index..src.index + n),
+                        }
+                        .message(|_| format!("{}, {}", src, n))?,
+                    ),
                 PointerDest::Scratch => {
                     self.ensure_scratch(dest.index + n);
-                    self.scratch[dest.index..dest.index + n].copy_from_slice(match src.into {
-                        PointerDest::Null => panic!(),
-                        PointerDest::Input => &self.input[src.index..src.index + n],
-                        PointerDest::Output => &self.output[src.index..src.index + n],
-                        PointerDest::Scratch => panic!(),
-                        PointerDest::Temp => &self.tmp[src.index..src.index + n],
-                    })
+                    self.scratch[dest.index..dest.index + n].copy_from_slice(
+                        match src.into {
+                            PointerDest::Null => None,
+                            PointerDest::Input => self.input.get(src.index..src.index + n),
+                            PointerDest::Output => self.output.get(src.index..src.index + n),
+                            PointerDest::Scratch => None,
+                            PointerDest::Temp => self.tmp.get(src.index..src.index + n),
+                        }
+                        .message(|_| format!("{}, {}", src, n))?,
+                    )
                 }
                 PointerDest::Temp => {
                     self.ensure_tmp(dest.index + n);
-                    self.tmp[dest.index..dest.index + n].copy_from_slice(match src.into {
-                        PointerDest::Null => panic!(),
-                        PointerDest::Input => &self.input[src.index..src.index + n],
-                        PointerDest::Output => &self.output[src.index..src.index + n],
-                        PointerDest::Scratch => &self.scratch[src.index..src.index + n],
-                        PointerDest::Temp => panic!(),
-                    })
+                    self.tmp[dest.index..dest.index + n].copy_from_slice(
+                        match src.into {
+                            PointerDest::Null => None,
+                            PointerDest::Input => self.input.get(src.index..src.index + n),
+                            PointerDest::Output => self.output.get(src.index..src.index + n),
+                            PointerDest::Scratch => self.scratch.get(src.index..src.index + n),
+                            PointerDest::Temp => None,
+                        }
+                        .message(|_| format!("{}, {}", src, n))?,
+                    )
                 }
             }
         }
+        Ok(())
     }
 
-    pub fn memset(&mut self, p: Pointer, v: u8, n: usize) {
+    pub fn memset(&mut self, p: Pointer, v: u8, n: usize) -> Res<()> {
         p.debug(n);
         match p.into {
-            PointerDest::Null => panic!(),
-            PointerDest::Input => panic!(),
-            PointerDest::Output => &mut self.output[p.index..p.index + n],
+            PointerDest::Null => Err(ErrorBuilder::default())?,
+            PointerDest::Input => Err(ErrorBuilder::default())?,
+            PointerDest::Output => self
+                .output
+                .get_mut(p.index..p.index + n)
+                .message(|_| format!("{}, {}", p, n))?,
             PointerDest::Scratch => {
                 self.ensure_scratch(p.index + n);
                 &mut self.scratch[p.index..p.index + n]
@@ -502,5 +521,6 @@ impl Core<'_> {
             }
         }
         .fill(v);
+        Ok(())
     }
 }
