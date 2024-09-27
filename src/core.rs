@@ -1027,15 +1027,18 @@ impl Core<'_> {
             0x7fffffff, 0xffffffff,
         ];
 
-        for i in (0..num_lens & !1).step_by(2) {
-            bits_f |= self.get_be_bytes(f, 4).at(self)? as u32 >> (24 - bitpos_f);
+        for i in 0..num_lens / 2 {
+            bits_f |= self
+                .get_be_bytes(f, 4.min(self.input.len() - f.index))
+                .at(self)? as u32
+                >> (24 - bitpos_f);
             f += (bitpos_f + 7) >> 3;
 
             bits_b |= self.get_le_bytes((b - 4)?, 4).at(self)? as u32 >> (24 - bitpos_b);
             b -= (bitpos_b + 7) >> 3;
 
-            let numbits_f = self.get_byte(interval_lenlog2 + i + 0)? as i32;
-            let numbits_b = self.get_byte(interval_lenlog2 + i + 1)? as i32;
+            let numbits_f = self.get_byte(interval_lenlog2 + i * 2 + 0)? as i32;
+            let numbits_b = self.get_byte(interval_lenlog2 + i * 2 + 1)? as i32;
 
             bits_f = (bits_f | 1).rotate_left(numbits_f as _);
             bitpos_f += numbits_f - 8 * ((bitpos_f + 7) >> 3);
@@ -1055,7 +1058,10 @@ impl Core<'_> {
 
         // read final one since above loop reads 2
         if (num_lens & 1) == 1 {
-            bits_f |= self.get_be_bytes(f, 4).at(self)? as u32 >> (24 - bitpos_f);
+            bits_f |= self
+                .get_be_bytes(f, 4.min(self.input.len() - f.index))
+                .at(self)? as u32
+                >> (24 - bitpos_f);
             let numbits_f = self.get_byte((interval_lenlog2 + num_lens - 1)?)?;
             bits_f = (bits_f | 1).rotate_left(numbits_f as _);
             let value_f = bits_f & BITMASKS[numbits_f as usize];
