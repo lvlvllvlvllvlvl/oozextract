@@ -98,7 +98,7 @@ impl<In: Read + Seek> Extractor<In> {
     /// but decompressors for some formats may fail if the output would be smaller
     /// than the input buffer, as decompressed size doesn't appear to be encoded
     /// in the compression format.
-    pub fn read(&mut self, buf: &mut [u8]) -> Res<usize> {
+    pub fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         log::debug!("reading to buf with size {}", buf.len());
         let mut bytes_written = 0;
         while bytes_written < buf.len() {

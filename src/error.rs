@@ -1,12 +1,13 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::ops::Deref;
 use std::panic::Location;
 
 #[derive(Debug)]
 pub struct OozError {
     pub message: Option<String>,
     pub context: Option<String>,
-    pub source: Option<Box<dyn Error>>,
+    pub source: Option<Box<dyn Error + Send + Sync>>,
     pub location: &'static Location<'static>,
 }
 
@@ -14,7 +15,10 @@ pub type Res<T> = Result<T, OozError>;
 
 impl Error for OozError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.source.as_deref()
+        match self.source {
+            Some(ref err) => Some(err.deref()),
+            None => None,
+        }
     }
 }
 
@@ -31,6 +35,12 @@ impl Display for OozError {
             write!(f, "\ncaused by {}", cause)?
         }
         Ok(())
+    }
+}
+
+impl From<OozError> for std::io::Error {
+    fn from(value: OozError) -> Self {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, value)
     }
 }
 
@@ -56,7 +66,7 @@ impl From<ErrorBuilder> for OozError {
 pub(crate) struct ErrorBuilder {
     pub message: Option<String>,
     pub context: Option<String>,
-    pub source: Option<Box<dyn Error>>,
+    pub source: Option<Box<dyn Error + Send + Sync>>,
 }
 
 pub trait ResultBuilder<T> {
@@ -91,7 +101,7 @@ pub(crate) trait WithContext<T, E: Error, C: ErrorContext> {
     fn at(self, context: &mut C) -> Result<T, ErrorBuilder>;
 }
 
-impl<T, E: Error + 'static, C: ErrorContext> WithContext<T, E, C> for Result<T, E> {
+impl<T, E: Error + 'static + Send + Sync, C: ErrorContext> WithContext<T, E, C> for Result<T, E> {
     fn at(self, context: &mut C) -> Result<T, ErrorBuilder> {
         self.map_err(|e| ErrorBuilder {
             context: context.describe(),
