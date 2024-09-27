@@ -8,9 +8,9 @@ on:
         description: Which number to bump
         default: patch
         options:
-        - major
-        - minor
-        - patch
+          - major
+          - minor
+          - patch
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,8 +24,8 @@ jobs:
       - id: cache
         uses: actions/cache@v4
         with:
-            path: ~/.cargo/bin/cargo-release
-            key: ${{ runner.os }}-cargo-release
+          path: ~/.cargo/bin/cargo-release
+          key: ${{ runner.os }}-cargo-release
       - run: cargo install cargo-release
         if: steps.cache.outputs.cache-hit != 'true'
       - run: |
