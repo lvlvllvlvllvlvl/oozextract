@@ -1156,7 +1156,7 @@ impl Core<'_> {
             let bits = self.get_be_bytes(src, 5).at(self)?;
             src_size = bits & 0x3ffff;
             dst_size = (((bits >> 18) | ((self.get_byte(src)? as usize) << 14)) & 0x3FFFF) + 1;
-            self.assert_lt(dst_size, src_size)?;
+            self.assert_lt(src_size, dst_size)?;
             src += 5;
         }
         self.assert_le(src_size, (src_end - src)?)?;
