@@ -1,6 +1,7 @@
 use crate::core::Core;
 use crate::error::{ErrorContext, Res, WithContext};
 use crate::pointer::Pointer;
+use wide::u8x16;
 
 pub const BASE_PREFIX: [usize; 12] = [
     0x0, 0x0, 0x2, 0x6, 0xE, 0x1E, 0x3E, 0x7E, 0xFE, 0x1FE, 0x2FE, 0x3FE,
@@ -226,19 +227,18 @@ impl Core<'_> {
 
 #[allow(unreachable_code)]
 pub fn reverse_lut(input: &[u8; 2064]) -> [u8; 2048] {
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(all(feature = "x86_sse", any(target_arch = "x86", target_arch = "x86_64")))]
     return reverse_sse(input);
-    #[cfg(feature = "nightly")]
-    return reverse_lut(input);
+    return reverse_simd(input);
     reverse_naive(input)
 }
 
-/// 2,546.73 ns/iter on my machine
+/// 2567.903645833333 ns/iter (+/- 149.404296875) on my machine
 pub fn reverse_naive(input: &[u8; 2064]) -> [u8; 2048] {
     std::array::from_fn(|i| input[((i as u16).reverse_bits() >> 5) as usize])
 }
 
-/// 133.47 ns/iter on my machine
+/// 145.24246174617463 ns/iter (+/- 12.897633513351337) on my machine
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub fn reverse_sse(input: &[u8; 2064]) -> [u8; 2048] {
     #[cfg(target_arch = "x86")]
@@ -307,10 +307,8 @@ pub fn reverse_sse(input: &[u8; 2064]) -> [u8; 2048] {
     result
 }
 
-/// 142.68 ns/iter on my machine
-#[cfg(feature = "nightly")]
+/// 176.2703125 ns/iter (+/- 30.97856249999998) on my machine
 pub fn reverse_simd(input: &[u8; 2064]) -> [u8; 2048] {
-    use std::simd::*;
     let mut result = [0; 2048];
     let mut output = &mut result[..];
     const OFFSETS: [usize; 32] = [
@@ -320,33 +318,36 @@ pub fn reverse_simd(input: &[u8; 2064]) -> [u8; 2048] {
     ];
     for offset in OFFSETS {
         let i = &input[offset..];
-        let t: [u8x8; 8] = std::array::from_fn(|j| u8x8::from_slice(&i[j * 256..]));
-        let mut iter = t.array_chunks().map(|[l, r]| l.interleave(*r));
+        let t: [u8x16; 8] = std::array::from_fn(|j| u8x16::from(&i[j * 256..][..16]));
+        let mut iter = t.chunks(2).map(|c| u8x16::unpack_low(c[0], c[1]));
         let t: [_; 4] = std::array::from_fn(|_| iter.next().unwrap());
-        let mut iter = t
-            .array_chunks()
-            .map(|[l, r]| (l.0.interleave(r.0), l.1.interleave(r.1)));
+        let mut iter = t.chunks(2).map(|c| {
+            [
+                u8x16::unpack_low(c[0], c[1]),
+                u8x16::unpack_high(c[0], c[1]),
+            ]
+        });
         let t: [_; 2] = std::array::from_fn(|_| iter.next().unwrap());
         let t = t
-            .array_chunks()
-            .map(|[l, r]| {
+            .chunks(2)
+            .map(|c| {
                 (
-                    l.0 .0.interleave(r.0 .0),
-                    l.1 .0.interleave(r.1 .0),
-                    l.0 .1.interleave(r.0 .1),
-                    l.1 .1.interleave(r.1 .1),
+                    u8x16::unpack_low(c[0][0], c[1][0]),
+                    u8x16::unpack_low(c[0][1], c[1][1]),
+                    u8x16::unpack_high(c[0][0], c[1][0]),
+                    u8x16::unpack_high(c[0][1], c[1][1]),
                 )
             })
             .next()
             .unwrap();
-        output[..8].copy_from_slice(&t.0 .0.to_array());
-        output[1024..][..8].copy_from_slice(&t.0 .1.to_array());
-        output[256..][..8].copy_from_slice(&t.1 .0.to_array());
-        output[1280..][..8].copy_from_slice(&t.1 .1.to_array());
-        output[512..][..8].copy_from_slice(&t.2 .0.to_array());
-        output[1536..][..8].copy_from_slice(&t.2 .1.to_array());
-        output[768..][..8].copy_from_slice(&t.3 .0.to_array());
-        output[1792..][..8].copy_from_slice(&t.3 .1.to_array());
+        output[..8].copy_from_slice(&t.0.as_array_ref()[..8]);
+        output[1024..][..8].copy_from_slice(&t.0.as_array_ref()[8..]);
+        output[256..][..8].copy_from_slice(&t.1.as_array_ref()[..8]);
+        output[1280..][..8].copy_from_slice(&t.1.as_array_ref()[8..]);
+        output[512..][..8].copy_from_slice(&t.2.as_array_ref()[..8]);
+        output[1536..][..8].copy_from_slice(&t.2.as_array_ref()[8..]);
+        output[768..][..8].copy_from_slice(&t.3.as_array_ref()[..8]);
+        output[1792..][..8].copy_from_slice(&t.3.as_array_ref()[8..]);
         output = &mut output[8..];
     }
     result
@@ -362,12 +363,10 @@ mod tests {
     fn simd_test() {
         let input: [u8; 2064] = std::array::from_fn(|i| (i as u8).bitxor((i >> 8) as u8));
         let naive = reverse_naive(&input);
-        #[cfg(feature = "nightly")]
         let simd = reverse_simd(&input);
         let sse = reverse_sse(&input);
         for i in 1..2048 {
             assert_eq!(naive[i], sse[i], "{}", i);
-            #[cfg(feature = "nightly")]
             assert_eq!(naive[i], simd[i], "{}", i);
         }
     }

@@ -10,6 +10,7 @@ exclude = ["testdata", "verify"]
 [dependencies]
 log = "0.4.22"
 test-log = "0.2.16"
+wide = "0.7.28"
 
 [features]
-nightly = []
+x86_sse = []

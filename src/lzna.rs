@@ -1,16 +1,17 @@
 use crate::error::{ErrorContext, Res};
 use std::array;
+use wide::{i16x16, i16x8, CmpGt};
 
 type LznaBitModel = u16;
 
 /// State for a 4-bit value RANS model
 struct LznaNibbleModel {
-    prob: [u16; 17],
+    prob: i16x16,
 }
 
 /// State for a 3-bit value RANS model
 struct Lzna3bitModel {
-    prob: [u16; 9],
+    prob: i16x8,
 }
 
 /// State for the literal model
@@ -75,10 +76,10 @@ pub struct LznaState {
 impl Default for LznaNibbleModel {
     fn default() -> Self {
         Self {
-            prob: [
+            prob: i16x16::from([
                 0x0000, 0x0800, 0x1000, 0x1800, 0x2000, 0x2800, 0x3000, 0x3800, 0x4000, 0x4800,
-                0x5000, 0x5800, 0x6000, 0x6800, 0x7000, 0x7800, 0x8000,
-            ],
+                0x5000, 0x5800, 0x6000, 0x6800, 0x7000, 0x7800,
+            ]),
         }
     }
 }
@@ -86,9 +87,9 @@ impl Default for LznaNibbleModel {
 impl Default for Lzna3bitModel {
     fn default() -> Self {
         Self {
-            prob: [
-                0x0000, 0x1000, 0x2000, 0x3000, 0x4000, 0x5000, 0x6000, 0x7000, 0x8000,
-            ],
+            prob: i16x8::from([
+                0x0000, 0x1000, 0x2000, 0x3000, 0x4000, 0x5000, 0x6000, 0x7000,
+            ]),
         }
     }
 }
@@ -267,44 +268,19 @@ impl<'a> Lzna<'a> {
     /// Read a 4-bit value using an adaptive RANS model
     fn read_nibble(&mut self, model: &mut LznaNibbleModel) -> usize {
         let x = self.bits_a;
-        let bitindex;
-        let start;
-        let end;
 
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-        unsafe {
-            #[cfg(target_arch = "x86")]
-            use std::arch::x86::*;
-            #[cfg(target_arch = "x86_64")]
-            use std::arch::x86_64::*;
+        let arr = model.prob.as_array_ref();
+        let cmp = model.prob.cmp_gt(i16x16::splat(x as i16 & 0x7FFF));
 
-            let t0 = _mm_loadu_si128(std::ptr::addr_of!(model.prob[0]).cast());
-            let t1 = _mm_loadu_si128(std::ptr::addr_of!(model.prob[8]).cast());
+        let bitindex = cmp.move_mask().trailing_zeros().min(16) as usize;
+        let start = *arr.get(bitindex - 1).unwrap_or(&0) as u64;
+        let end = arr.get(bitindex).map(|&v| v as u64).unwrap_or(0x8000);
 
-            let t = _mm_cvtsi32_si128(x as i32 & 0x7FFF);
-            let t = _mm_shuffle_epi32::<0>(_mm_unpacklo_epi16(t, t));
-
-            let c0 = _mm_cmpgt_epi16(t0, t);
-            let c1 = _mm_cmpgt_epi16(t1, t);
-
-            let m = _mm_movemask_epi8(_mm_packs_epi16(c0, c1));
-
-            bitindex = (m | 0x10000).trailing_zeros() as usize;
-            start = model.prob[bitindex - 1] as u64;
-            end = model.prob[bitindex] as u64;
-
-            let c0 = _mm_and_si128(_mm_set1_epi16(0x7FD9), c0);
-            let c1 = _mm_and_si128(_mm_set1_epi16(0x7FD9), c1);
-
-            let c0 = _mm_add_epi16(c0, _mm_set_epi16(56, 48, 40, 32, 24, 16, 8, 0));
-            let c1 = _mm_add_epi16(c1, _mm_set_epi16(120, 112, 104, 96, 88, 80, 72, 64));
-
-            let t0 = _mm_add_epi16(_mm_srai_epi16::<7>(_mm_sub_epi16(c0, t0)), t0);
-            let t1 = _mm_add_epi16(_mm_srai_epi16::<7>(_mm_sub_epi16(c1, t1)), t1);
-
-            _mm_storeu_si128(std::ptr::addr_of_mut!(model.prob[0]).cast(), t0);
-            _mm_storeu_si128(std::ptr::addr_of_mut!(model.prob[8]).cast(), t1);
-        }
+        let mut update = cmp & i16x16::splat(0x7FD9);
+        update += i16x16::from(array::from_fn(|i| i as i16 * 8));
+        update -= model.prob;
+        update = update >> 7;
+        model.prob += update;
 
         self.bits_a = (end - start) * (x >> 15) + (x & 0x7FFF) - start;
         self.renormalize();
@@ -313,31 +289,20 @@ impl<'a> Lzna<'a> {
 
     /// Read a 3-bit value using an adaptive RANS model
     fn read_3_bits(&mut self, model: &mut Lzna3bitModel) -> usize {
-        let bitindex;
-        let start;
-        let end;
         let x = self.bits_a;
 
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-        unsafe {
-            #[cfg(target_arch = "x86")]
-            use std::arch::x86::*;
-            #[cfg(target_arch = "x86_64")]
-            use std::arch::x86_64::*;
-            let t0 = _mm_loadu_si128(std::ptr::addr_of!(model.prob[0]).cast());
-            let t = _mm_cvtsi32_si128(x as i32 & 0x7FFF);
-            let t = _mm_shuffle_epi32::<0>(_mm_unpacklo_epi16(t, t));
-            let c0 = _mm_cmpgt_epi16(t0, t);
+        let arr = model.prob.as_array_ref();
+        let cmp = model.prob.cmp_gt(i16x8::splat(x as i16 & 0x7FFF));
 
-            bitindex = (_mm_movemask_epi8(c0) | 0x10000).trailing_zeros() as usize >> 1;
-            start = model.prob[bitindex - 1] as u64;
-            end = model.prob[bitindex] as u64;
+        let bitindex = cmp.move_mask().trailing_zeros().min(8) as usize;
+        let start = *arr.get(bitindex - 1).unwrap_or(&0) as u64;
+        let end = arr.get(bitindex).map(|&v| v as u64).unwrap_or(0x8000);
 
-            let c0 = _mm_and_si128(_mm_set1_epi16(0x7FE5), c0);
-            let c0 = _mm_add_epi16(c0, _mm_set_epi16(56, 48, 40, 32, 24, 16, 8, 0));
-            let t0 = _mm_add_epi16(_mm_srai_epi16::<7>(_mm_sub_epi16(c0, t0)), t0);
-            _mm_storeu_si128(std::ptr::addr_of!(model.prob[0]).cast_mut().cast(), t0);
-        }
+        let mut update = cmp & i16x8::splat(0x7FE5);
+        update += i16x8::from([0, 8, 16, 24, 32, 40, 48, 56]);
+        update -= model.prob;
+        update = update >> 7;
+        model.prob += update;
 
         self.bits_a = (end - start) * (x >> 15) + (x & 0x7FFF) - start;
         self.renormalize();
