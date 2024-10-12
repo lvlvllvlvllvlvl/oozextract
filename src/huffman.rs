@@ -239,7 +239,7 @@ pub fn reverse_naive(input: &[u8; 2064]) -> [u8; 2048] {
 }
 
 /// 145.24246174617463 ns/iter (+/- 12.897633513351337) on my machine
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(feature = "x86_sse", any(target_arch = "x86", target_arch = "x86_64")))]
 pub fn reverse_sse(input: &[u8; 2064]) -> [u8; 2048] {
     #[cfg(target_arch = "x86")]
     use std::arch::x86::*;
@@ -364,8 +364,10 @@ mod tests {
         let input: [u8; 2064] = std::array::from_fn(|i| (i as u8).bitxor((i >> 8) as u8));
         let naive = reverse_naive(&input);
         let simd = reverse_simd(&input);
+        #[cfg(all(feature = "x86_sse", any(target_arch = "x86", target_arch = "x86_64")))]
         let sse = reverse_sse(&input);
         for i in 1..2048 {
+            #[cfg(all(feature = "x86_sse", any(target_arch = "x86", target_arch = "x86_64")))]
             assert_eq!(naive[i], sse[i], "{}", i);
             assert_eq!(naive[i], simd[i], "{}", i);
         }

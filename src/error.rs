@@ -71,6 +71,7 @@ pub(crate) struct ErrorBuilder {
 
 pub trait ResultBuilder<T> {
     fn message<F: FnOnce(Option<&str>) -> String>(self, msg: F) -> Result<T, ErrorBuilder>;
+    fn err(self) -> Result<T, ErrorBuilder>;
 }
 
 impl<T> ResultBuilder<T> for Result<T, ErrorBuilder> {
@@ -78,10 +79,14 @@ impl<T> ResultBuilder<T> for Result<T, ErrorBuilder> {
         match self {
             Ok(v) => Ok(v),
             Err(e) => Err(ErrorBuilder {
-                message: Some(msg(e.message.as_ref().map(String::as_str))),
-                ..Default::default()
+                message: Some(msg(e.message.as_deref())),
+                ..e
             }),
         }
+    }
+
+    fn err(self) -> Result<T, ErrorBuilder> {
+        self
     }
 }
 
@@ -93,6 +98,13 @@ impl<T> ResultBuilder<T> for Option<T> {
                 message: Some(msg(None)),
                 ..Default::default()
             }),
+        }
+    }
+
+    fn err(self) -> Result<T, ErrorBuilder> {
+        match self {
+            Some(v) => Ok(v),
+            None => Err(Default::default()),
         }
     }
 }

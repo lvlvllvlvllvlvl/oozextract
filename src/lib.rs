@@ -15,7 +15,7 @@ mod pointer;
 mod tans;
 
 use crate::core::Core;
-use crate::error::{End::*, ErrorBuilder, ErrorContext, Res, ResultBuilder, WithContext};
+use crate::error::{End::*, ErrorContext, Res, ResultBuilder, WithContext};
 use crate::kraken::Kraken;
 use crate::leviathan::Leviathan;
 use crate::lzna::{Lzna, LznaState};
@@ -245,14 +245,14 @@ impl<In: Read + Seek> Extractor<In> {
     }
 
     fn parse_header(&mut self) -> Res<()> {
-        let [b1, b2] = self.read_bytes(2)?;
+        let [b1, b2] = self.read_bytes(2).at(self)?;
         if ((b1 & 0xF) != 0xC) || (((b1 >> 4) & 3) != 0) {
             self.raise(format!("Invalid header {:X}", u16::from_le_bytes([b1, b2])))?
         } else {
             self.header = BlockHeader {
                 restart_decoder: (b1 >> 7) & 1 == 1,
                 uncompressed: (b1 >> 6) & 1 == 1,
-                decoder_type: self.decoder_type(b2 & 0x7F)?,
+                decoder_type: self.decoder_type(b2 & 0x7F).at(self)?,
                 use_checksums: (b2 >> 7) != 0,
             };
             Ok(())
@@ -341,14 +341,15 @@ impl<In: Read + Seek> Extractor<In> {
         }
     }
 
-    fn read_bytes<const N: usize>(&mut self, to_read: usize) -> Result<[u8; N], ErrorBuilder> {
+    fn read_bytes<const N: usize>(&mut self, to_read: usize) -> Res<[u8; N]> {
         self.assert_le(to_read, N)?;
         let mut buf = [0; N];
-        self.input
+        Ok(self
+            .input
             .read_exact(&mut buf[N - to_read..])
             .and(Ok(buf))
             .at(self)
-            .message(|_| format!("Expected {} bytes", to_read))
+            .message(|_| format!("Expected {} bytes", to_read))?)
     }
 }
 

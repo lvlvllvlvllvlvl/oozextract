@@ -48,7 +48,11 @@ impl<const F: usize, const A: usize, const L: usize> Base<F, A, L> {
     fn adapt(&mut self, sym: usize) -> Res<()> {
         self.adapt_interval = 1024;
         self.assert_lt(sym, F)?;
-        self.freq[sym] += Self::F_INC;
+        if let Some(v) = self.freq.get_mut(sym) {
+            *v += Self::F_INC
+        } else {
+            self.raise(format!("[_; {}][{}]", F, sym))?;
+        }
 
         let mut sum = 0;
         for (f, a) in self.freq.iter_mut().zip(self.a[1..].iter_mut()) {
@@ -64,21 +68,16 @@ impl<const F: usize, const A: usize, const L: usize> Base<F, A, L> {
     fn lookup(&mut self, bits: &mut u32) -> Res<usize> {
         let masked = (*bits & 0x7FFF) as u16;
         let i = (masked >> Self::SHIFT) as usize;
-        self.assert_lt(i, L)?;
-        let mut sym = self.lookup[i] as usize;
-        self.assert_lt(sym + 1, A)?;
-        if masked > self.a[sym + 1] {
+        let mut sym = *self.lookup.get(i).err()? as usize;
+        if masked > *self.a.get(sym + 1).err()? {
             sym += 1;
             self.assert_lt(sym + 1, A)?;
         }
-        sym += self.a[sym + 1..]
-            .iter()
-            .position(|&v| v > masked)
-            .ok_or_else(ErrorBuilder::default)?;
-        let s = self.a[sym] as u32;
-        let s1 = self.a[sym + 1] as u32;
+        sym += self.a[sym + 1..].iter().position(|&v| v > masked).err()?;
+        let s = *self.a.get(sym).err()? as u32;
+        let s1 = *self.a.get(sym + 1).err()? as u32;
         *bits = masked as u32 + (*bits >> 15) * (s1 - s) - s;
-        self.freq[sym] += 31;
+        *self.freq.get_mut(sym).err()? += 31;
         self.adapt_interval -= 1;
         if self.adapt_interval == 0 {
             self.adapt(sym).at(self)?;
@@ -108,7 +107,7 @@ impl<const F: usize, const A: usize, const L: usize> Default for Base<F, A, L> {
             lookup: [0; L],
         };
 
-        s.fill_lut().unwrap();
+        s.fill_lut().expect("initializer should not fail");
         s
     }
 }
@@ -177,8 +176,7 @@ impl<'a> Core<'a> {
     }
 
     fn read<const N: usize>(&self) -> Result<&[u8; N], ErrorBuilder> {
-        Ok(self
-            .input
+        self.input
             .get(self.src..)
             .and_then(|s| s.first_chunk())
             .message(|_| {
@@ -188,7 +186,7 @@ impl<'a> Core<'a> {
                     self.input.len(),
                     self.src
                 )
-            })?)
+            })
     }
 
     fn read_2(&mut self) -> Res<u32> {
@@ -205,7 +203,9 @@ impl<'a> Core<'a> {
 
     fn write_1(&mut self, v: u8) -> Res<()> {
         self.assert_lt(self.dst, self.output.len())?;
-        self.output[self.dst] = v;
+        if let Some(dst) = self.output.get_mut(self.dst) {
+            *dst = v
+        };
         self.dst += 1;
         Ok(())
     }
@@ -222,7 +222,23 @@ impl<'a> Core<'a> {
 
     fn write_sym(&mut self, sym: u8) -> Res<()> {
         self.assert_lt(self.dst, self.output.len())?;
-        self.output[self.dst] = sym.wrapping_add(self.last_match());
+        if let Some(&m) = self
+            .output
+            .get(self.dst - self.state.last_match_dist as usize)
+        {
+            if let Some(dst) = self.output.get_mut(self.dst) {
+                *dst = sym.wrapping_add(m);
+            } else {
+                self.raise(format!("[_; {}][{}]", self.output.len(), self.dst))?;
+            }
+        } else {
+            self.raise(format!(
+                "[_; {}][{} - {}]",
+                self.output.len(),
+                self.dst,
+                self.state.last_match_dist
+            ))?;
+        }
         self.dst += 1;
         Ok(())
     }
@@ -246,16 +262,20 @@ impl<'a> Core<'a> {
         Ok(())
     }
 
-    fn last_match(&self) -> u8 {
-        self.output[self.dst - self.state.last_match_dist as usize]
-    }
-
     fn lookup_literal(&mut self) -> Res<usize> {
-        self.state.literals[self.litmodel[self.dst & 3]].lookup(&mut self.bits)
+        self.state
+            .literals
+            .get_mut(self.litmodel[self.dst & 3])
+            .err()?
+            .lookup(&mut self.bits)
     }
 
     fn lookup_lsb(&mut self) -> Res<usize> {
-        self.state.distance_lsb[self.distancelsb[self.dst & 3]].lookup(&mut self.bits)
+        self.state
+            .distance_lsb
+            .get_mut(self.distancelsb[self.dst & 3])
+            .err()?
+            .lookup(&mut self.bits)
     }
 
     fn lookup_bits(&mut self) -> Res<usize> {
@@ -342,9 +362,12 @@ impl<'a> Core<'a> {
                 }
                 match_dist = (32 << nb) + (match_dist << 5) + sym as u32 - 39;
 
-                self.state.recent_dist[(recent_mask >> 21) & 7] =
-                    self.state.recent_dist[(recent_mask >> 18) & 7];
-                self.state.recent_dist[(recent_mask >> 18) & 7] = match_dist;
+                let i1 = (recent_mask >> 21) & 7;
+                let i2 = (recent_mask >> 18) & 7;
+                self.assert_lt(i1, self.state.recent_dist.len())?;
+                self.assert_lt(i2, self.state.recent_dist.len())?;
+                self.state.recent_dist[i1] = self.state.recent_dist[i2];
+                self.state.recent_dist[i2] = match_dist;
             } else {
                 let idx = (recent_mask >> (3 * sym)) & 7;
                 let mask = !7 << (3 * sym);
