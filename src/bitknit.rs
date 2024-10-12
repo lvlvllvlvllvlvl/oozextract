@@ -9,7 +9,7 @@ struct Base<const F: usize, const A: usize, const L: usize> {
 }
 
 impl<const F: usize, const A: usize, const L: usize> ErrorContext for Base<F, A, L> {
-    fn describe(&mut self) -> Option<String> {
+    fn describe(&self) -> Option<String> {
         Some(
             match F {
                 300 => "Literal",

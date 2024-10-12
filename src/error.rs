@@ -110,11 +110,11 @@ impl<T> ResultBuilder<T> for Option<T> {
 }
 
 pub(crate) trait WithContext<T, E: Error, C: ErrorContext> {
-    fn at(self, context: &mut C) -> Result<T, ErrorBuilder>;
+    fn at(self, context: &C) -> Result<T, ErrorBuilder>;
 }
 
 impl<T, E: Error + 'static + Send + Sync, C: ErrorContext> WithContext<T, E, C> for Result<T, E> {
-    fn at(self, context: &mut C) -> Result<T, ErrorBuilder> {
+    fn at(self, context: &C) -> Result<T, ErrorBuilder> {
         self.map_err(|e| ErrorBuilder {
             context: context.describe(),
             source: Some(Box::new(e)),
@@ -124,11 +124,11 @@ impl<T, E: Error + 'static + Send + Sync, C: ErrorContext> WithContext<T, E, C> 
 }
 
 pub(crate) trait ErrorContext {
-    fn describe(&mut self) -> Option<String> {
+    fn describe(&self) -> Option<String> {
         None
     }
 
-    fn raise<T>(&mut self, msg: String) -> Result<T, ErrorBuilder> {
+    fn raise<T>(&self, msg: String) -> Result<T, ErrorBuilder> {
         Err(ErrorBuilder {
             message: Some(msg),
             context: self.describe(),
@@ -137,7 +137,7 @@ pub(crate) trait ErrorContext {
     }
 
     fn slice_mut<'a, T>(
-        &mut self,
+        &self,
         slice: &'a mut [T],
         start: usize,
         end: End,

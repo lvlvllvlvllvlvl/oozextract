@@ -21,7 +21,7 @@ use crate::leviathan::Leviathan;
 use crate::lzna::{Lzna, LznaState};
 use crate::mermaid::Mermaid;
 use std::fmt::Debug;
-use std::io::{Read, Seek};
+use std::io::Read;
 
 #[derive(Debug, Default)]
 pub enum DecoderType {
@@ -85,14 +85,15 @@ pub enum QuantumHeader {
     Uncompressed,
 }
 
-pub struct Extractor<In: Read + Seek> {
+pub struct Extractor<In: Read> {
     input: In,
+    pos: usize,
     header: BlockHeader,
     bitknit_state: Option<bitknit::State>,
     lzna_state: Option<LznaState>,
 }
 
-impl<In: Read + Seek> Extractor<In> {
+impl<In: Read> Extractor<In> {
     /// Buf should be the expected size of the output file.
     /// You could also try reading blocks of 0x40000 bytes at a time,
     /// but decompressors for some formats may fail if the output would be smaller
@@ -118,14 +119,24 @@ impl<In: Read + Seek> Extractor<In> {
     }
 }
 
-impl<In: Read + Seek> Extractor<In> {
+impl<In: Read> Extractor<In> {
     pub fn new(input: In) -> Extractor<In> {
         Extractor {
             input,
+            pos: 0,
             header: Default::default(),
             bitknit_state: None,
             lzna_state: None,
         }
+    }
+
+    fn read_exact(&mut self, buf: &mut [u8]) -> Res<()> {
+        self.input
+            .read_exact(buf)
+            .at(self)
+            .message(|_| format!("Failed to read {} bytes", buf.len()))?;
+        self.pos += buf.len();
+        Ok(())
     }
 
     fn extract(&mut self, output: &mut [u8], offset: usize) -> Res<usize> {
@@ -133,21 +144,9 @@ impl<In: Read + Seek> Extractor<In> {
         let dst_bytes_left = std::cmp::min(output.len() - offset, self.header.block_size());
 
         if self.header.uncompressed {
-            let mut bytes_copied = 0;
-            while bytes_copied < dst_bytes_left {
-                let out = self.slice_mut(output, offset + bytes_copied, Idx(dst_bytes_left))?;
-                let count = self
-                    .input
-                    .read(out)
-                    .at(self)
-                    .message(|_| format!("Copy failed after {} bytes", bytes_copied))?;
-                bytes_copied += count;
-                if count == 0 {
-                    break;
-                }
-            }
-            log::debug!("Copied {} bytes", bytes_copied);
-            return Ok(bytes_copied);
+            let out = self.slice_mut(output, offset, Idx(dst_bytes_left))?;
+            self.read_exact(out).at(self)?;
+            return Ok(out.len());
         }
 
         let quantum = self.parse_quantum_header()?;
@@ -157,10 +156,7 @@ impl<In: Read + Seek> Extractor<In> {
                 compressed_size, ..
             } => {
                 let input = self.slice_mut(tmp, 0, Idx(compressed_size))?;
-                self.input
-                    .read_exact(input)
-                    .at(self)
-                    .message(|_| format!("Failed to read {} bytes", compressed_size))?;
+                self.read_exact(input).at(self)?;
                 if self.header.use_checksums {
                     // If you can find a file with checksums enabled maybe you can figure out which algorithm to use here
                 }
@@ -234,11 +230,7 @@ impl<In: Read + Seek> Extractor<In> {
             QuantumHeader::Uncompressed => {
                 // no test coverage
                 let out = self.slice_mut(output, offset, Len(dst_bytes_left))?;
-                self.input
-                    .read_exact(out)
-                    .and(Ok(dst_bytes_left))
-                    .at(self)
-                    .message(|_| format!("{} uncompressed bytes", dst_bytes_left))?;
+                self.read_exact(out).at(self)?;
                 Ok(dst_bytes_left)
             }
         }
@@ -344,22 +336,17 @@ impl<In: Read + Seek> Extractor<In> {
     fn read_bytes<const N: usize>(&mut self, to_read: usize) -> Res<[u8; N]> {
         self.assert_le(to_read, N)?;
         let mut buf = [0; N];
-        Ok(self
-            .input
-            .read_exact(&mut buf[N - to_read..])
-            .and(Ok(buf))
-            .at(self)
-            .message(|_| format!("Expected {} bytes", to_read))?)
+        self.read_exact(&mut buf[N - to_read..]).at(self)?;
+        Ok(buf)
     }
 }
 
-impl<In: Read + Seek> ErrorContext for Extractor<In> {
-    fn describe(&mut self) -> Option<String> {
-        Some(if let Ok(position) = self.input.stream_position() {
-            format!("header: {:?}, input bytes read: {}", self.header, position)
-        } else {
-            format!("header: {:?}", self.header)
-        })
+impl<In: Read> ErrorContext for Extractor<In> {
+    fn describe(&self) -> Option<String> {
+        Some(format!(
+            "header: {:?}, input bytes read: {}",
+            self.header, self.pos
+        ))
     }
 }
 

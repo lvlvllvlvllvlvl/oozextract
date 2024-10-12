@@ -1343,7 +1343,7 @@ impl Core<'_> {
 }
 
 impl ErrorContext for Core<'_> {
-    fn describe(&mut self) -> Option<String> {
+    fn describe(&self) -> Option<String> {
         Some(format!(
             "Source index: {}, destination index: {}",
             self.src.index, self.dst.index
