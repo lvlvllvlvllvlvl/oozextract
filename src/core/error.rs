@@ -1,5 +1,5 @@
 use std::error::Error;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
 use std::panic::Location;
 
@@ -69,9 +69,12 @@ pub(crate) struct ErrorBuilder {
     pub source: Option<Box<dyn Error + Send + Sync>>,
 }
 
-pub trait ResultBuilder<T> {
+pub trait ResultBuilder<T>: Sized {
     fn message<F: FnOnce(Option<&str>) -> String>(self, msg: F) -> Result<T, ErrorBuilder>;
     fn err(self) -> Result<T, ErrorBuilder>;
+    fn msg_of<M: Debug>(self, msg: &M) -> Result<T, ErrorBuilder> {
+        self.message(|_| format!("{:?}", msg))
+    }
 }
 
 impl<T> ResultBuilder<T> for Result<T, ErrorBuilder> {
@@ -196,6 +199,39 @@ pub(crate) trait ErrorContext {
         } else {
             self.raise(format!("Expected {} != {}", l, r))
         }
+    }
+}
+
+pub(crate) trait SliceErrors<T> {
+    fn get_copy(&self, i: usize) -> Result<T, ErrorBuilder>;
+    fn slice_mut(&mut self, start: usize, end: End) -> Result<&mut [T], ErrorBuilder>;
+}
+
+impl<T: Copy> SliceErrors<T> for [T] {
+    fn get_copy(&self, i: usize) -> Result<T, ErrorBuilder> {
+        self.get(i).copied().ok_or_else(|| ErrorBuilder {
+            message: Some(format!(
+                "Error getting {} from slice with length {}",
+                i,
+                self.len()
+            )),
+            ..Default::default()
+        })
+    }
+    fn slice_mut(&mut self, start: usize, end: End) -> Result<&mut Self, ErrorBuilder> {
+        let len = self.len();
+        match end {
+            End::Idx(i) => self.get_mut(start..i),
+            End::Len(l) => self.get_mut(start..start + l),
+            //End::Open => slice.get_mut(start..),
+        }
+        .ok_or_else(|| ErrorBuilder {
+            message: Some(format!(
+                "Error getting {}..{:?} from slice with length {}",
+                start, end, len
+            )),
+            ..Default::default()
+        })
     }
 }
 

@@ -1,4 +1,7 @@
-use crate::core::error::{ErrorBuilder, ErrorContext, Res, ResultBuilder, WithContext};
+use crate::core::error::{
+    End, ErrorBuilder, ErrorContext, Res, ResultBuilder, SliceErrors, WithContext,
+};
+use End::Len;
 
 #[derive(Copy, Clone)]
 struct Base<const F: usize, const A: usize, const L: usize> {
@@ -265,7 +268,10 @@ impl<'a> Bitknit<'a> {
     fn lookup_literal(&mut self) -> Res<usize> {
         self.state
             .literals
-            .get_mut(self.litmodel[self.dst & 3])
+            .get_mut(
+                #[allow(clippy::indexing_slicing)]
+                self.litmodel[self.dst & 3],
+            )
             .err()?
             .lookup(&mut self.bits)
     }
@@ -273,7 +279,10 @@ impl<'a> Bitknit<'a> {
     fn lookup_lsb(&mut self) -> Res<usize> {
         self.state
             .distance_lsb
-            .get_mut(self.distancelsb[self.dst & 3])
+            .get_mut(
+                #[allow(clippy::indexing_slicing)]
+                self.distancelsb[self.dst & 3],
+            )
             .err()?
             .lookup(&mut self.bits)
     }
@@ -366,18 +375,21 @@ impl<'a> Bitknit<'a> {
                 let i2 = (recent_mask >> 18) & 7;
                 self.assert_lt(i1, self.state.recent_dist.len())?;
                 self.assert_lt(i2, self.state.recent_dist.len())?;
-                self.state.recent_dist[i1] = self.state.recent_dist[i2];
-                self.state.recent_dist[i2] = match_dist;
+                #[allow(clippy::indexing_slicing)]
+                {
+                    self.state.recent_dist[i1] = self.state.recent_dist[i2];
+                    self.state.recent_dist[i2] = match_dist;
+                }
             } else {
                 let idx = (recent_mask >> (3 * sym)) & 7;
                 let mask = !7 << (3 * sym);
-                match_dist = self.state.recent_dist[idx];
+                match_dist = self.state.recent_dist.get_copy(idx)?;
                 recent_mask = (recent_mask & mask) | ((idx + 8 * recent_mask) & !mask);
             }
 
             if match_dist == 1 {
-                let v = self.output[self.dst - 1];
-                self.output[self.dst..][..copy_length].fill(v);
+                let v = self.output.get_copy(self.dst - 1)?;
+                self.output.slice_mut(self.dst, Len(copy_length))?.fill(v);
             } else if match_dist as usize > copy_length {
                 let src = self.dst - match_dist as usize;
                 self.output.copy_within(src..src + copy_length, self.dst);

@@ -152,7 +152,7 @@ impl std::ops::Sub<Pointer> for Pointer {
         self.assert_eq(self.into, rhs.into)?;
         self.index
             .checked_sub(rhs.index)
-            .message(|_| format!("{} - {}", self.index, rhs.index))
+            .msg_of(&(self.index, rhs.index))
     }
 }
 
@@ -163,7 +163,7 @@ impl std::ops::Sub<usize> for Pointer {
         self.index
             .checked_sub(rhs)
             .map(|index| Pointer { index, ..self })
-            .message(|_| format!("{} - {}", self.index, rhs))
+            .msg_of(&(self.index, rhs))
     }
 }
 
@@ -184,7 +184,7 @@ impl std::ops::Sub<i32> for Pointer {
             .checked_neg()
             .and_then(|v| self.index.checked_add_signed(v))
             .map(|index| Pointer { index, ..self })
-            .message(|_| format!("{} - {}", self.index, rhs))
+            .msg_of(&(self.index, rhs))
     }
 }
 
@@ -238,7 +238,7 @@ impl std::ops::Sub<IntPointer> for IntPointer {
         self.index
             .checked_sub(rhs.index)
             .map(|v| v / 4)
-            .message(|_| format!("{} - {}", self, rhs))
+            .msg_of(&(self, rhs))
     }
 }
 
@@ -281,7 +281,7 @@ impl Core<'_> {
             PointerDest::Temp => self.tmp.get(p.index),
         }
         .copied()
-        .message(|_| format!("{}", p))?)
+        .msg_of(&p)?)
     }
     pub fn get_slice(&mut self, p: Pointer, n: usize) -> Res<&[u8]> {
         Ok(match p.into {
@@ -460,7 +460,7 @@ impl Core<'_> {
                 PointerDest::Output => self
                     .output
                     .get_mut(dest.index..dest.index + n)
-                    .message(|_| format!("{}, {}", dest, n))?
+                    .msg_of(&(dest, n))?
                     .copy_from_slice(
                         match src.into {
                             PointerDest::Null => None,
@@ -469,7 +469,7 @@ impl Core<'_> {
                             PointerDest::Scratch => self.scratch.get(src.index..src.index + n),
                             PointerDest::Temp => self.tmp.get(src.index..src.index + n),
                         }
-                        .message(|_| format!("{}, {}", src, n))?,
+                        .msg_of(&(src, n))?,
                     ),
                 PointerDest::Scratch => {
                     self.ensure_scratch(dest.index + n);
@@ -481,7 +481,7 @@ impl Core<'_> {
                             PointerDest::Scratch => None,
                             PointerDest::Temp => self.tmp.get(src.index..src.index + n),
                         }
-                        .message(|_| format!("{}, {}", src, n))?,
+                        .msg_of(&(src, n))?,
                     )
                 }
                 PointerDest::Temp => {
@@ -494,7 +494,7 @@ impl Core<'_> {
                             PointerDest::Scratch => self.scratch.get(src.index..src.index + n),
                             PointerDest::Temp => None,
                         }
-                        .message(|_| format!("{}, {}", src, n))?,
+                        .msg_of(&(src, n))?,
                     )
                 }
             }
@@ -507,10 +507,7 @@ impl Core<'_> {
         match p.into {
             PointerDest::Null => Err(ErrorBuilder::default())?,
             PointerDest::Input => Err(ErrorBuilder::default())?,
-            PointerDest::Output => self
-                .output
-                .get_mut(p.index..p.index + n)
-                .message(|_| format!("{}, {}", p, n))?,
+            PointerDest::Output => self.output.get_mut(p.index..p.index + n).msg_of(&(p, n))?,
             PointerDest::Scratch => {
                 self.ensure_scratch(p.index + n);
                 &mut self.scratch[p.index..p.index + n]
