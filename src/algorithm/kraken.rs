@@ -1,7 +1,7 @@
 use crate::algorithm::Algorithm;
+use crate::core::error::{ErrorContext, Res, WithContext};
+use crate::core::pointer::{IntPointer, Pointer};
 use crate::core::Core;
-use crate::error::{ErrorContext, Res, WithContext};
-use crate::pointer::{IntPointer, Pointer};
 
 // Kraken decompression happens in two phases, first one decodes
 // all the literals and copy lengths using huffman and second

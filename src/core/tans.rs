@@ -1,7 +1,7 @@
-use crate::bit_reader::{BitReader, BitReader2};
+use crate::core::bit_reader::{BitReader, BitReader2};
+use crate::core::error::{ErrorContext, Res, WithContext};
+use crate::core::pointer::Pointer;
 use crate::core::Core;
-use crate::error::{ErrorContext, Res, WithContext};
-use crate::pointer::Pointer;
 
 #[derive(Default)]
 pub struct TansDecoder {
@@ -243,7 +243,7 @@ impl TansDecoder {
             };
 
             core.decode_golomb_rice_lengths(&mut rice[..total_rice_values], &mut br2)
-                .at(&mut tans_data)?;
+                .at(&tans_data)?;
 
             // Switch back to other bitreader impl
             bits.bitpos = 24;
@@ -255,7 +255,7 @@ impl TansDecoder {
 
             let range = core
                 .convert_to_ranges(num_symbols, fluff, &rice, bits)
-                .at(&mut tans_data)?;
+                .at(&tans_data)?;
 
             bits.refill(core).at(self)?;
 

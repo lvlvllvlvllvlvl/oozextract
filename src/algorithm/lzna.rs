@@ -1,4 +1,4 @@
-use crate::error::{ErrorContext, Res};
+use crate::core::error::{ErrorContext, Res};
 use std::array;
 use wide::{i16x16, i16x8, CmpGt};
 

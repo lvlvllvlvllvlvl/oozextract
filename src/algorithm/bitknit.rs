@@ -1,4 +1,4 @@
-use crate::error::{ErrorBuilder, ErrorContext, Res, ResultBuilder, WithContext};
+use crate::core::error::{ErrorBuilder, ErrorContext, Res, ResultBuilder, WithContext};
 
 #[derive(Copy, Clone)]
 struct Base<const F: usize, const A: usize, const L: usize> {
@@ -112,7 +112,7 @@ impl<const F: usize, const A: usize, const L: usize> Default for Base<F, A, L> {
     }
 }
 
-pub(crate) struct State {
+pub(crate) struct BitknitState {
     recent_dist: [u32; 8],
     last_match_dist: u32,
     recent_dist_mask: u32,
@@ -122,7 +122,7 @@ pub(crate) struct State {
     distance_bits: DistanceBits,
 }
 
-impl State {
+impl BitknitState {
     pub(crate) fn new() -> Self {
         Self {
             last_match_dist: 1,
@@ -141,8 +141,8 @@ impl State {
     }
 }
 
-pub(crate) struct Core<'a> {
-    state: &'a mut State,
+pub(crate) struct Bitknit<'a> {
+    state: &'a mut BitknitState,
     input: &'a [u8],
     output: &'a mut [u8],
     src: usize,
@@ -153,15 +153,15 @@ pub(crate) struct Core<'a> {
     distancelsb: [usize; 4],
 }
 
-impl ErrorContext for Core<'_> {}
+impl ErrorContext for Bitknit<'_> {}
 
-impl<'a> Core<'a> {
+impl<'a> Bitknit<'a> {
     pub(crate) fn new(
         input: &'a [u8],
         output: &'a mut [u8],
-        state: &'a mut State,
+        state: &'a mut BitknitState,
         dst: usize,
-    ) -> Core<'a> {
+    ) -> Bitknit<'a> {
         Self {
             state,
             input,

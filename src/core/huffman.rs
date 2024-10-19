@@ -1,6 +1,6 @@
+use crate::core::error::{ErrorContext, Res, WithContext};
+use crate::core::pointer::Pointer;
 use crate::core::Core;
-use crate::error::{ErrorContext, Res, WithContext};
-use crate::pointer::Pointer;
 use wide::u8x16;
 
 pub const BASE_PREFIX: [usize; 12] = [

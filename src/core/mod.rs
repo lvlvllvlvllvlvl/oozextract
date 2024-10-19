@@ -1,11 +1,17 @@
+pub(crate) mod bit_reader;
+pub(crate) mod error;
+pub(crate) mod huffman;
+pub(crate) mod pointer;
+pub(crate) mod tans;
+
 use crate::algorithm::Algorithm;
-use crate::bit_reader::{BitReader, BitReader2};
-use crate::error::End::Idx;
-use crate::error::{ErrorContext, Res, ResultBuilder, WithContext};
-use crate::huffman::{HuffRange, HuffReader, BASE_PREFIX};
-use crate::pointer::{IntPointer, Pointer, PointerDest};
-use crate::tans::TansDecoder;
+use bit_reader::{BitReader, BitReader2};
+use error::End::Idx;
+use error::{ErrorContext, Res, ResultBuilder, WithContext};
+use huffman::{HuffRange, HuffReader, BASE_PREFIX};
+use pointer::{IntPointer, Pointer, PointerDest};
 use std::fmt::Debug;
+use tans::TansDecoder;
 
 pub(crate) struct Core<'a> {
     pub input: &'a [u8],

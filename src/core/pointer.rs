@@ -1,5 +1,5 @@
+use crate::core::error::{ErrorBuilder, ErrorContext, Res, ResultBuilder, WithContext};
 use crate::core::Core;
-use crate::error::{ErrorBuilder, ErrorContext, Res, ResultBuilder, WithContext};
 use std::fmt::{Display, Formatter};
 use std::mem::size_of;
 
@@ -178,9 +178,9 @@ impl std::ops::Sub<u32> for Pointer {
 impl std::ops::Sub<i32> for Pointer {
     type Output = Result<Pointer, ErrorBuilder>;
 
-    fn sub(mut self, rhs: i32) -> Self::Output {
+    fn sub(self, rhs: i32) -> Self::Output {
         isize::try_from(rhs)
-            .at(&mut self)?
+            .at(&self)?
             .checked_neg()
             .and_then(|v| self.index.checked_add_signed(v))
             .map(|index| Pointer { index, ..self })
@@ -280,7 +280,7 @@ impl Core<'_> {
             PointerDest::Scratch => self.scratch.get(p.index),
             PointerDest::Temp => self.tmp.get(p.index),
         }
-        .map(|&v| v)
+        .copied()
         .message(|_| format!("{}", p))?)
     }
     pub fn get_slice(&mut self, p: Pointer, n: usize) -> Res<&[u8]> {
