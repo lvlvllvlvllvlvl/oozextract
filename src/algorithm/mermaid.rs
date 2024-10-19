@@ -249,8 +249,7 @@ impl MermaidLzTable {
                     - self
                         .off16_stream
                         .pop_front()
-                        .message(|_| "offset_stream_empty".into())?
-                        as usize)?;
+                        .msg_of(&"offset_stream_empty")? as usize)?;
                 recent_offs = offs_ptr.index as i32 - dst.index as i32;
                 core.repeat_copy_64(dst, offs_ptr, length).at(self)?;
                 dst += length;

@@ -163,7 +163,7 @@ impl<In: Read> Extractor<In> {
                         let state = self
                             .bitknit_state
                             .as_mut()
-                            .message(|_| "Bitknit uninitialized".into())?;
+                            .msg_of(&"Bitknit uninitialized")?;
                         let mut bitknit = Bitknit::new(input, out, state, offset);
                         bitknit.decode()
                     }
@@ -173,10 +173,7 @@ impl<In: Read> Extractor<In> {
                             self.header.restart_decoder = false;
                         }
                         let out = self.slice_mut(output, 0, Idx(offset + dst_bytes_left))?;
-                        let state = self
-                            .lzna_state
-                            .as_mut()
-                            .message(|_| "Lzna uninitialized".into())?;
+                        let state = self.lzna_state.as_mut().msg_of(&"Lzna uninitialized")?;
                         Lzna::new(input, out, offset).decode_quantum(state)
                     }
                 }

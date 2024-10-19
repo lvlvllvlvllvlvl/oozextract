@@ -1,6 +1,11 @@
 //#![feature(portable_simd, array_chunks)]
 #![allow(clippy::too_many_arguments)]
-#![warn(clippy::indexing_slicing, clippy::unwrap_used, clippy::panic)]
+#![warn(
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::missing_asserts_for_indexing
+)]
 mod algorithm;
 mod core;
 mod extractor;

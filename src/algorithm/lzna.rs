@@ -143,6 +143,7 @@ impl LznaState {
         }
     }
 
+    #[allow(clippy::indexing_slicing)]
     fn preprocess_match_history(&mut self) {
         if self.match_history[4] >= 0xc000 {
             let mut i = 0;

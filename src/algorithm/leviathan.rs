@@ -1,5 +1,5 @@
 use crate::algorithm::Algorithm;
-use crate::core::error::{ErrorContext, Res, WithContext};
+use crate::core::error::{ErrorContext, Res, ResultBuilder, SliceErrors, WithContext};
 use crate::core::pointer::{IntPointer, Pointer};
 use crate::core::Core;
 
@@ -58,8 +58,8 @@ impl LeviathanLzTable {
         let mut out;
         let mut decode_count = 0;
 
-        assert!(chunk_type <= 5, "invalid chunk type {}", chunk_type);
-        assert!((src_end - src)? >= 13, "{}", (src_end - src)?);
+        self.assert_le(chunk_type, 5)?;
+        self.assert_le(13, (src_end - src)?)?;
 
         if offset == 0 {
             core.copy_bytes(dst, src, 8).at(self)?;
@@ -191,7 +191,7 @@ impl LeviathanLzTable {
         tmp += decode_count;
         self.lit_stream_total = decode_count;
 
-        assert!(src < src_end);
+        self.assert_lt(src, src_end)?;
 
         let flag = core.get_byte(src).at(self)?;
         if (flag & 0x80) == 0 {
@@ -309,7 +309,9 @@ impl LeviathanLzTable {
         let mut cmd_stream_ptr = &mut multi_cmd_stream[0];
         if multi_cmd {
             for (i, p) in multi_cmd_stream.iter_mut().enumerate() {
-                *p = self.multi_cmd_ptr[i.wrapping_sub(dst_start.index) & 7];
+                *p = self
+                    .multi_cmd_ptr
+                    .get_copy(i.wrapping_sub(dst_start.index) & 7)?;
             }
             cmd_stream_left = self.cmd_stream_size;
             cmd_stream_ptr = &mut multi_cmd_stream[dst.index & 7];
@@ -335,7 +337,7 @@ impl LeviathanLzTable {
             }
 
             let offs_index = cmd >> 5;
-            assert!(offs_index < 8);
+            self.assert_le(offs_index, 8)?;
             let mut matchlen = (cmd & 7) + 2;
 
             recent_offs[15] = core.get_int(offs_stream).at(core)?;
@@ -343,32 +345,23 @@ impl LeviathanLzTable {
             mode.copy_literals(core, cmd, &mut dst, &mut len_stream, match_zone_end, offset)
                 .at(self)?;
 
-            offset = recent_offs[offs_index + 8];
+            offset = recent_offs.get_copy(offs_index + 8)?;
 
             // Permute the recent offsets table
-            let mut temp = [0; 4];
-
-            temp.copy_from_slice(&recent_offs[offs_index + 4..][..4]);
-            recent_offs.copy_within(offs_index..offs_index + 4, offs_index + 1);
-            recent_offs[offs_index + 5..][..4].copy_from_slice(&temp);
+            recent_offs.copy_within(offs_index..offs_index + 8, offs_index + 1);
             recent_offs[8] = offset;
             if offs_index == 7 {
                 offs_stream += 1;
             }
 
             copyfrom = dst + offset;
-            assert!(
-                copyfrom >= window_base,
-                "offset out of bounds {} {}",
-                offset,
-                (dst - window_base)?
-            );
+            self.assert_le(window_base, copyfrom)?;
 
             if matchlen == 9 {
-                assert!(len_stream < len_stream_end, "len stream empty");
+                self.assert_lt(len_stream, len_stream_end)?;
                 len_stream_end = (len_stream_end - 1)?;
                 matchlen = (core.get_int(len_stream_end).at(core)? + 6) as usize;
-                assert!(matchlen <= (dst_end - dst)? - 8, "no space in buf");
+                self.assert_le(matchlen, (dst_end - dst)? - 8)?;
                 core.repeat_copy_64(dst, copyfrom, matchlen).at(self)?;
                 dst += matchlen;
                 if multi_cmd {
@@ -430,7 +423,7 @@ impl ErrorContext for LeviathanModeSub {}
 impl LeviathanMode for LeviathanModeSub {
     fn new(lzt: &LeviathanLzTable, _: Pointer, _: &mut Core) -> Res<Self> {
         Ok(Self {
-            lit_stream: lzt.lit_stream[0],
+            lit_stream: *lzt.lit_stream.first().err()?,
         })
     }
     fn copy_literals(
@@ -477,7 +470,7 @@ impl ErrorContext for LeviathanModeRaw {}
 impl LeviathanMode for LeviathanModeRaw {
     fn new(lzt: &LeviathanLzTable, _: Pointer, _: &mut Core) -> Res<Self> {
         Ok(Self {
-            lit_stream: lzt.lit_stream[0],
+            lit_stream: *lzt.lit_stream.first().err()?,
         })
     }
 
@@ -525,10 +518,14 @@ impl ErrorContext for LeviathanModeLamSub {}
 
 impl LeviathanMode for LeviathanModeLamSub {
     fn new(lzt: &LeviathanLzTable, _: Pointer, _: &mut Core) -> Res<Self> {
-        Ok(Self {
-            lit_stream: lzt.lit_stream[0],
-            lam_lit_stream: lzt.lit_stream[1],
-        })
+        if let &[lit_stream, lam_lit_stream] = &*lzt.lit_stream {
+            Ok(Self {
+                lit_stream,
+                lam_lit_stream,
+            })
+        } else {
+            lzt.raise(format!("{:?}", lzt.lit_stream))?
+        }
     }
 
     fn copy_literals(
@@ -551,8 +548,8 @@ impl LeviathanMode for LeviathanModeLamSub {
             *len_stream += 1;
         }
 
-        assert_ne!(litlen, 0, "lamsub mode requires one literal");
-        assert!(litlen < (match_zone_end - *dst)?, "out of bounds");
+        self.assert_ne(litlen, 0)?;
+        self.assert_lt(litlen, (match_zone_end - *dst)?)?;
         litlen -= 1;
 
         let lam_byte = core
@@ -633,7 +630,7 @@ impl<const NUM: usize> LeviathanMode for LeviathanModeSubAnd<NUM> {
         if lit_cmd == 0x18 {
             let litlen = core.get_int(*len_stream).at(core)? as usize & 0xffffff;
             *len_stream += 1;
-            assert!(litlen <= (match_zone_end - *dst)?);
+            self.assert_le(litlen, (match_zone_end - *dst)?)?;
             for _ in 0..litlen {
                 self.copy_literal(core, dst, last_offset).at(self)?;
             }
@@ -669,7 +666,9 @@ struct LeviathanModeO1 {
 impl ErrorContext for LeviathanModeO1 {}
 
 impl LeviathanMode for LeviathanModeO1 {
+    #[allow(clippy::indexing_slicing)]
     fn new(lzt: &LeviathanLzTable, _: Pointer, core: &mut Core) -> Res<Self> {
+        core.assert_le(16, lzt.lit_stream.len())?;
         let mut result = Self {
             lit_streams: core::array::from_fn(|i| lzt.lit_stream[i] + 1),
             next_lit: [0; 16],
@@ -694,7 +693,7 @@ impl LeviathanMode for LeviathanModeO1 {
         if lit_cmd == 0x18 {
             let litlen = core.get_int(*len_stream).at(core)?;
             *len_stream += 1;
-            assert!(litlen > 0);
+            self.assert_lt(0, litlen)?;
             self.context = core.get_byte((*dst - 1)?).at(self)?;
             for _ in 0..litlen {
                 self.copy_literal(core, dst).at(self)?;
@@ -726,6 +725,7 @@ impl LeviathanMode for LeviathanModeO1 {
 }
 
 impl LeviathanModeO1 {
+    #[allow(clippy::indexing_slicing)] // u8 >> 4 can safely index [_; 16]
     fn copy_literal(&mut self, core: &mut Core, dst: &mut Pointer) -> Res<()> {
         let slot = (self.context >> 4) as usize;
         self.context = self.next_lit[slot];

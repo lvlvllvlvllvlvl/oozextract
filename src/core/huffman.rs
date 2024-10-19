@@ -1,4 +1,5 @@
-use crate::core::error::{ErrorContext, Res, SliceErrors, WithContext};
+use crate::core::error::End::Len;
+use crate::core::error::{ErrorContext, Res, ResultBuilder, SliceErrors, WithContext};
 use crate::core::pointer::Pointer;
 use crate::core::Core;
 use wide::u8x16;
@@ -126,10 +127,10 @@ impl HuffReader {
                 src_bits |= (core.get_le_bytes(src, 2).at(core)? as u32) << src_bitpos;
             }
             k = (src_bits & 0x7FF) as _;
-            n = lut.bits2len[k];
+            n = lut.bits2len.get_copy(k)?;
             src_bitpos -= n as i32;
             src_bits >>= n as u32;
-            core.set(dst, lut.bits2sym[k]).at(self)?;
+            core.set(dst, lut.bits2sym.get_copy(k)?).at(self)?;
             dst += 1;
             src += (7 - src_bitpos) >> 3;
             src_bitpos &= 7;
@@ -147,19 +148,19 @@ impl HuffReader {
                     src_mid_bits |=
                         (core.get_le_bytes(src_mid, 2).at(self)? as u32) << src_mid_bitpos;
                 }
-                n = lut.bits2len[(src_end_bits & 0x7FF) as usize];
-                core.set(dst, lut.bits2sym[(src_end_bits & 0x7FF) as usize])
+                core.set(dst, lut.bits2sym.get_copy((src_end_bits & 0x7FF) as usize)?)
                     .at(self)?;
                 dst += 1;
+                n = lut.bits2len.get_copy((src_end_bits & 0x7FF) as usize)?;
                 src_end_bitpos -= n as i32;
                 src_end_bits >>= n as u32;
                 src_end -= (7 - src_end_bitpos) >> 3;
                 src_end_bitpos &= 7;
                 if dst < dst_end {
-                    n = lut.bits2len[(src_mid_bits & 0x7FF) as usize];
-                    core.set(dst, lut.bits2sym[(src_mid_bits & 0x7FF) as usize])
+                    core.set(dst, lut.bits2sym.get_copy((src_mid_bits & 0x7FF) as usize)?)
                         .at(self)?;
                     dst += 1;
+                    n = lut.bits2len.get_copy((src_mid_bits & 0x7FF) as usize)?;
                     src_mid_bitpos -= n as i32;
                     src_mid_bits >>= n as u32;
                     src_mid += (7 - src_mid_bitpos) >> 3;
@@ -193,27 +194,33 @@ impl Core<'_> {
         let mut bits2sym = [0u8; 2048 + 16];
         let mut currslot = 0;
         for i in 1..11u8 {
-            let start = BASE_PREFIX[usize::from(i)];
-            let count = prefix_cur[usize::from(i)] - start;
+            #[allow(clippy::indexing_slicing)]
+            let (start, cur) = (BASE_PREFIX[usize::from(i)], prefix_cur[usize::from(i)]);
+            let count = cur - start;
             if count != 0 {
                 let stepsize = 1 << (11 - i);
                 let num_to_set = count << (11 - i);
                 assert!(currslot + num_to_set <= 2048);
-                bits2len[currslot..][..num_to_set].fill(i);
+                bits2len.slice_mut(currslot, Len(num_to_set))?.fill(i);
 
                 for j in 0..count {
                     let dst = currslot + stepsize * j;
-                    bits2sym[dst..][..stepsize].fill(syms[start + j])
+                    bits2sym
+                        .slice_mut(dst, Len(stepsize))?
+                        .fill(syms.get_copy(start + j)?)
                 }
                 currslot += num_to_set;
             }
         }
         if prefix_cur[11] - BASE_PREFIX[11] != 0 {
             let num_to_set = prefix_cur[11] - BASE_PREFIX[11];
-            assert!(currslot + num_to_set <= 2048);
-            bits2len[currslot..][..num_to_set].fill(11);
-            bits2sym[currslot..][..num_to_set]
-                .copy_from_slice(&syms[BASE_PREFIX[11]..][..num_to_set]);
+            bits2len.slice_mut(currslot, Len(num_to_set))?.fill(11);
+            let sym = syms
+                .get(BASE_PREFIX[11]..BASE_PREFIX[11] + num_to_set)
+                .msg_of(&(BASE_PREFIX[11], num_to_set))?;
+            bits2sym
+                .slice_mut(currslot, Len(num_to_set))?
+                .copy_from_slice(sym);
             currslot += num_to_set;
         }
 
