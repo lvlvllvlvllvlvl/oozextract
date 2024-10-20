@@ -9,7 +9,7 @@ use bit_reader::{BitReader, BitReader2};
 use error::End::Idx;
 use error::{ErrorContext, Res, ResultBuilder, WithContext};
 use huffman::{HuffRange, HuffReader, BASE_PREFIX};
-use pointer::{IntPointer, Pointer, PointerDest};
+use pointer::{Pointer, PointerDest};
 use std::fmt::Debug;
 use tans::TansDecoder;
 
@@ -105,17 +105,14 @@ impl Core<'_> {
         src_end: Pointer,
         mut packed_offs_stream: Pointer,
         packed_offs_stream_extra: Pointer,
-        packed_offs_stream_size: usize,
         multi_dist_scale: i32,
-        packed_litlen_stream: Pointer,
-        packed_litlen_stream_size: usize,
-        mut offs_stream: IntPointer,
-        len_stream: IntPointer,
+        mut packed_litlen_stream: Pointer,
+        offs_stream: &mut [i32],
+        len_stream: &mut [i32],
         excess_flag: bool,
     ) -> Res<()> {
         let mut n;
         let mut u32_len_stream_size = 0usize;
-        let offs_stream_org = offs_stream;
 
         let mut bits_a = BitReader {
             bitpos: 24,
@@ -148,54 +145,43 @@ impl Core<'_> {
 
         if multi_dist_scale == 0 {
             // Traditional way of coding offsets
-            let packed_offs_stream_end = packed_offs_stream + packed_offs_stream_size;
-            while packed_offs_stream != packed_offs_stream_end {
-                let d_a = bits_a
+            for c in offs_stream.chunks_mut(2) {
+                c[0] = -bits_a
                     .read_distance(self, self.get_byte(packed_offs_stream)?.into())
                     .at(self)?;
-                self.set_int(offs_stream, -d_a).at(self)?;
-                offs_stream += 1;
                 packed_offs_stream += 1;
-                if packed_offs_stream == packed_offs_stream_end {
-                    break;
+                if c.len() == 2 {
+                    c[1] = -bits_b
+                        .read_distance_b(self, self.get_byte(packed_offs_stream)?.into())
+                        .at(self)?;
+                    packed_offs_stream += 1;
                 }
-                let d_b = bits_b
-                    .read_distance_b(self, self.get_byte(packed_offs_stream)?.into())
-                    .at(self)?;
-                self.set_int(offs_stream, -d_b).at(self)?;
-                offs_stream += 1;
-                packed_offs_stream += 1;
             }
         } else {
             // New way of coding offsets
-            let packed_offs_stream_end = packed_offs_stream + packed_offs_stream_size;
             let mut cmd;
             let mut offs;
-            while packed_offs_stream != packed_offs_stream_end {
+            for c in offs_stream.chunks_mut(2) {
                 cmd = self.get_byte(packed_offs_stream)? as i32;
                 packed_offs_stream += 1;
                 self.assert_le(cmd >> 3, 26)?;
                 offs = ((8 + (cmd & 7)) << (cmd >> 3))
                     | bits_a.read_more_than24bits(self, cmd >> 3).at(self)?;
-                self.set_int(offs_stream, 8 - offs).at(self)?;
-                offs_stream += 1;
-                if packed_offs_stream == packed_offs_stream_end {
-                    break;
+                c[0] = 8 - offs;
+                if c.len() == 2 {
+                    cmd = i32::from(self.get_byte(packed_offs_stream)?);
+                    packed_offs_stream += 1;
+                    self.assert_le(cmd >> 3, 26)?;
+                    offs = ((8 + (cmd & 7)) << (cmd >> 3))
+                        | bits_b.read_more_than_24_bits_b(self, cmd >> 3).at(self)?;
+                    c[1] = 8 - offs;
                 }
-                cmd = i32::from(self.get_byte(packed_offs_stream)?);
-                packed_offs_stream += 1;
-                self.assert_le(cmd >> 3, 26)?;
-                offs = ((8 + (cmd & 7)) << (cmd >> 3))
-                    | bits_b.read_more_than_24_bits_b(self, cmd >> 3).at(self)?;
-                self.set_int(offs_stream, 8 - offs).at(self)?;
-                offs_stream += 1;
             }
             if multi_dist_scale != 1 {
                 self.combine_scaled_offset_arrays(
-                    &offs_stream_org,
-                    (offs_stream - offs_stream_org)?,
+                    offs_stream,
                     multi_dist_scale,
-                    &packed_offs_stream_extra,
+                    packed_offs_stream_extra,
                 )
                 .at(self)?;
             }
@@ -221,13 +207,14 @@ impl Core<'_> {
 
         self.assert_eq(bits_a.p, bits_b.p)?;
 
-        for i in 0..packed_litlen_stream_size {
-            let mut v = u32::from(self.get_byte(packed_litlen_stream + i)?);
+        for val in len_stream.iter_mut() {
+            let mut v = u32::from(self.get_byte(packed_litlen_stream)?);
+            packed_litlen_stream += 1;
             if v == 255 {
                 v = u32_len_stream_buf[u32_len_stream] + 255;
                 u32_len_stream += 1;
             }
-            self.set_int(len_stream + i, (v + 3) as i32).at(self)?;
+            *val = (v + 3) as i32;
         }
         self.assert_eq(u32_len_stream, u32_len_stream_size)?;
         Ok(())
@@ -235,15 +222,14 @@ impl Core<'_> {
 
     fn combine_scaled_offset_arrays(
         &mut self,
-        offs_stream: &IntPointer,
-        offs_stream_size: usize,
+        offs_stream: &mut [i32],
         scale: i32,
-        low_bits: &Pointer,
+        mut low_bits: Pointer,
     ) -> Res<()> {
-        for i in 0..offs_stream_size {
-            let low = self.get_byte(low_bits + i)? as i32;
-            let scaled = scale * self.get_int(offs_stream + i).at(self)? - low;
-            self.set_int(offs_stream + i, scaled).at(self)?
+        for val in offs_stream.iter_mut() {
+            *val *= scale;
+            *val -= self.get_byte(low_bits)? as i32;
+            low_bits += 1;
         }
         Ok(())
     }

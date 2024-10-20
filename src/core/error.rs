@@ -71,10 +71,10 @@ pub(crate) struct ErrorBuilder {
 
 pub trait ResultBuilder<T>: Sized {
     fn message<F: FnOnce(Option<&str>) -> String>(self, msg: F) -> Result<T, ErrorBuilder>;
-    fn err(self) -> Result<T, ErrorBuilder>;
     fn msg_of<M: Debug>(self, msg: &M) -> Result<T, ErrorBuilder> {
         self.message(|_| format!("{:?}", msg))
     }
+    fn err(self) -> Result<T, ErrorBuilder>;
 }
 
 impl<T> ResultBuilder<T> for Result<T, ErrorBuilder> {
@@ -99,6 +99,16 @@ impl<T> ResultBuilder<T> for Option<T> {
             Some(v) => Ok(v),
             None => Err(ErrorBuilder {
                 message: Some(msg(None)),
+                ..Default::default()
+            }),
+        }
+    }
+
+    fn msg_of<M: Debug>(self, msg: &M) -> Result<T, ErrorBuilder> {
+        match self {
+            Some(v) => Ok(v),
+            None => Err(ErrorBuilder {
+                message: Some(format!("{:?}", msg)),
                 ..Default::default()
             }),
         }
@@ -161,7 +171,7 @@ pub(crate) trait ErrorContext {
         })
     }
 
-    fn assert(&mut self, v: bool, msg: &str) -> Result<(), ErrorBuilder> {
+    fn assert(&self, v: bool, msg: &str) -> Result<(), ErrorBuilder> {
         if v {
             Ok(())
         } else {
@@ -169,7 +179,7 @@ pub(crate) trait ErrorContext {
         }
     }
 
-    fn assert_le<T: PartialOrd + Display>(&mut self, l: T, r: T) -> Result<(), ErrorBuilder> {
+    fn assert_le<T: PartialOrd + Display>(&self, l: T, r: T) -> Result<(), ErrorBuilder> {
         if l <= r {
             Ok(())
         } else {
@@ -177,7 +187,7 @@ pub(crate) trait ErrorContext {
         }
     }
 
-    fn assert_lt<T: PartialOrd + Display>(&mut self, l: T, r: T) -> Result<(), ErrorBuilder> {
+    fn assert_lt<T: PartialOrd + Display>(&self, l: T, r: T) -> Result<(), ErrorBuilder> {
         if l < r {
             Ok(())
         } else {
@@ -185,7 +195,7 @@ pub(crate) trait ErrorContext {
         }
     }
 
-    fn assert_eq<T: PartialOrd + Display>(&mut self, l: T, r: T) -> Result<(), ErrorBuilder> {
+    fn assert_eq<T: PartialOrd + Display>(&self, l: T, r: T) -> Result<(), ErrorBuilder> {
         if l == r {
             Ok(())
         } else {
@@ -193,7 +203,7 @@ pub(crate) trait ErrorContext {
         }
     }
 
-    fn assert_ne<T: PartialOrd + Display>(&mut self, l: T, r: T) -> Result<(), ErrorBuilder> {
+    fn assert_ne<T: PartialOrd + Display>(&self, l: T, r: T) -> Result<(), ErrorBuilder> {
         if l != r {
             Ok(())
         } else {

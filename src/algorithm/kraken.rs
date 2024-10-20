@@ -1,6 +1,6 @@
 use crate::algorithm::Algorithm;
 use crate::core::error::{ErrorContext, Res, ResultBuilder, SliceErrors, WithContext};
-use crate::core::pointer::{IntPointer, Pointer};
+use crate::core::pointer::Pointer;
 use crate::core::Core;
 
 // Kraken decompression happens in two phases, first one decodes
@@ -16,8 +16,7 @@ pub(crate) struct KrakenLzTable {
 
     // Holds the actual distances in case we're not using a recent
     // offset.
-    offs_stream: IntPointer,
-    offs_stream_size: usize,
+    offs_stream: Vec<i32>,
 
     // Holds the sequence of literals. All literal copying happens from
     // here.
@@ -26,8 +25,7 @@ pub(crate) struct KrakenLzTable {
 
     // Holds the lengths that do not fit in the flag stream. Both literal
     // lengths and match length are stored in the same array.
-    len_stream: IntPointer,
-    len_stream_size: usize,
+    len_stream: Vec<i32>,
 }
 
 impl ErrorContext for KrakenLzTable {}
@@ -134,6 +132,7 @@ impl KrakenLzTable {
         let mut offs_scaling = 0;
         let mut packed_offs_stream_extra = Pointer::null();
 
+        let mut offs_stream_size = 0;
         if (core.get_byte(src).at(self)? as usize) & 0x80 != 0 {
             // uses the mode where distances are coded with 2 tables
             // no test coverage for this branch.
@@ -146,14 +145,14 @@ impl KrakenLzTable {
                     &mut packed_offs_stream,
                     src,
                     src_end,
-                    &mut self.offs_stream_size,
+                    &mut offs_stream_size,
                     self.cmd_stream_size,
                     false,
                     scratch,
                 )
                 .at(self)?;
             src += n;
-            scratch += self.offs_stream_size;
+            scratch += offs_stream_size;
 
             if offs_scaling != 1 {
                 packed_offs_stream_extra = scratch;
@@ -163,12 +162,12 @@ impl KrakenLzTable {
                         src,
                         src_end,
                         &mut decode_count,
-                        self.offs_stream_size,
+                        offs_stream_size,
                         false,
                         scratch,
                     )
                     .at(self)?;
-                self.assert_eq(decode_count, self.offs_stream_size)?;
+                self.assert_eq(decode_count, offs_stream_size)?;
                 src += n;
                 scratch += decode_count;
             }
@@ -180,53 +179,45 @@ impl KrakenLzTable {
                     &mut packed_offs_stream,
                     src,
                     src_end,
-                    &mut self.offs_stream_size,
+                    &mut offs_stream_size,
                     self.cmd_stream_size,
                     false,
                     scratch,
                 )
                 .at(self)?;
             src += n;
-            scratch += self.offs_stream_size;
+            scratch += offs_stream_size;
         }
 
         // Decode packed litlen stream. It's bounded by 1/4 of dst_size.
         packed_len_stream = scratch;
+        let mut len_stream_size = 0;
         n = core
             .decode_bytes(
                 &mut packed_len_stream,
                 src,
                 src_end,
-                &mut self.len_stream_size,
+                &mut len_stream_size,
                 dst_size >> 2,
                 false,
                 scratch,
             )
             .at(self)?;
         src += n;
-        scratch += self.len_stream_size;
+        scratch += len_stream_size;
 
-        // Reserve memory for final dist stream
-        scratch = scratch.align(16);
-        self.offs_stream = scratch.into();
-        scratch += self.offs_stream_size * 4;
-
-        // Reserve memory for final len stream
-        scratch = scratch.align(16);
-        self.len_stream = scratch.into();
-        scratch += self.len_stream_size * 4;
+        self.offs_stream = vec![0; offs_stream_size];
+        self.len_stream = vec![0; len_stream_size];
 
         core.unpack_offsets(
             src,
             src_end,
             packed_offs_stream,
             packed_offs_stream_extra,
-            self.offs_stream_size,
             offs_scaling,
             packed_len_stream,
-            self.len_stream_size,
-            self.offs_stream,
-            self.len_stream,
+            self.offs_stream.as_mut(),
+            self.len_stream.as_mut(),
             false,
         )
         .at(self)?;
@@ -249,12 +240,10 @@ impl KrakenLzTable {
 
         let mut cmd_stream = self.cmd_stream;
         let cmd_stream_end = cmd_stream + self.cmd_stream_size;
-        let mut len_stream = self.len_stream;
-        let len_stream_end = self.len_stream + self.len_stream_size;
+        let mut len_stream = self.len_stream.iter().copied();
+        let mut offs_stream = self.offs_stream.iter().copied().peekable();
         let mut lit_stream = self.lit_stream;
         let lit_stream_end = self.lit_stream + self.lit_stream_size;
-        let mut offs_stream = self.offs_stream;
-        let offs_stream_end = self.offs_stream + self.offs_stream_size;
         let mut copyfrom;
         let mut offset;
         let mut recent_offs = [0; 7];
@@ -272,21 +261,10 @@ impl KrakenLzTable {
             let offs_index = f >> 6;
             let mut matchlen = (f >> 2) & 0xF;
 
-            // use cmov
-            let next_long_length = core.get_int(len_stream).at(core)?;
-            let next_len_stream = len_stream + 1;
-
-            len_stream = if litlen == 3 {
-                next_len_stream
-            } else {
-                len_stream
-            };
-            litlen = if litlen == 3 {
-                next_long_length.try_into().at(self)?
-            } else {
-                litlen
-            };
-            recent_offs[6] = core.get_int(offs_stream).at(core)?;
+            if litlen == 3 {
+                litlen = len_stream.next().err()? as _
+            }
+            recent_offs[6] = offs_stream.peek().copied().unwrap_or_default();
 
             if mode == 0 {
                 core.copy_64_add(dst, lit_stream, dst + last_offset, litlen)
@@ -303,7 +281,7 @@ impl KrakenLzTable {
             last_offset = offset;
 
             if offs_index == 3 {
-                offs_stream += 1;
+                offs_stream.next();
             }
 
             copyfrom = dst + offset;
@@ -312,18 +290,15 @@ impl KrakenLzTable {
                 dst += matchlen + 2;
             } else {
                 // why is the value not 16 here, the above case copies up to 16 bytes.
-                matchlen = (14 + core.get_int(len_stream).at(core)?)
-                    .try_into()
-                    .at(self)?;
-                len_stream += 1;
+                matchlen = (14 + len_stream.next().err()?).try_into().at(self)?;
                 core.repeat_copy_64(dst, copyfrom, matchlen).at(self)?;
                 dst += matchlen;
             }
         }
 
         // check for incorrect input
-        self.assert_eq(offs_stream, offs_stream_end)?;
-        self.assert_eq(len_stream, len_stream_end)?;
+        self.assert_eq(offs_stream.len(), 0)?;
+        self.assert_eq(len_stream.len(), 0)?;
 
         let final_len = (dst_end - dst)?;
         self.assert_eq(final_len, (lit_stream_end - lit_stream)?)?;

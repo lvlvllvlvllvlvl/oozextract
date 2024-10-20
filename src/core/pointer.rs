@@ -74,12 +74,6 @@ impl Pointer {
     pub fn is_null(&self) -> bool {
         self.into == PointerDest::Null
     }
-    pub fn align(&self, align: usize) -> Pointer {
-        Pointer {
-            index: (self.index + (align - 1)) & !(align - 1),
-            ..*self
-        }
-    }
     pub fn debug(&self, _: usize) {
         // do nothing (there are no bugs)
     }
@@ -148,7 +142,7 @@ impl std::ops::SubAssign<i32> for Pointer {
 impl std::ops::Sub<Pointer> for Pointer {
     type Output = Result<usize, ErrorBuilder>;
 
-    fn sub(mut self, rhs: Pointer) -> Self::Output {
+    fn sub(self, rhs: Pointer) -> Self::Output {
         self.assert_eq(self.into, rhs.into)?;
         self.index
             .checked_sub(rhs.index)
@@ -185,89 +179,6 @@ impl std::ops::Sub<i32> for Pointer {
             .and_then(|v| self.index.checked_add_signed(v))
             .map(|index| Pointer { index, ..self })
             .msg_of(&(self.index, rhs))
-    }
-}
-
-#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, PartialOrd)]
-pub(crate) struct IntPointer {
-    pub into: PointerDest,
-    pub index: usize,
-}
-
-impl Display for IntPointer {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}[{}]", self.into, self.index)
-    }
-}
-
-impl ErrorContext for IntPointer {}
-
-impl std::ops::Add<usize> for IntPointer {
-    type Output = Self;
-
-    fn add(self, rhs: usize) -> Self::Output {
-        IntPointer {
-            index: self.index + (rhs * 4),
-            ..self
-        }
-    }
-}
-
-impl std::ops::Add<usize> for &IntPointer {
-    type Output = IntPointer;
-
-    fn add(self, rhs: usize) -> Self::Output {
-        IntPointer {
-            index: self.index + (rhs * 4),
-            ..*self
-        }
-    }
-}
-
-impl std::ops::AddAssign<usize> for IntPointer {
-    fn add_assign(&mut self, rhs: usize) {
-        self.index += rhs * 4
-    }
-}
-
-impl std::ops::Sub<IntPointer> for IntPointer {
-    type Output = Result<usize, ErrorBuilder>;
-
-    fn sub(mut self, rhs: IntPointer) -> Self::Output {
-        self.assert_eq(self.into, rhs.into)?;
-        self.index
-            .checked_sub(rhs.index)
-            .map(|v| v / 4)
-            .msg_of(&(self, rhs))
-    }
-}
-
-impl std::ops::Sub<usize> for IntPointer {
-    type Output = Result<IntPointer, ErrorBuilder>;
-
-    fn sub(self, rhs: usize) -> Self::Output {
-        self.index
-            .checked_sub(rhs * 4)
-            .map(|index| IntPointer { index, ..self })
-            .message(|_| format!("{} - {} * 4", self, rhs))
-    }
-}
-
-impl From<Pointer> for IntPointer {
-    fn from(value: Pointer) -> Self {
-        IntPointer {
-            into: value.into,
-            index: value.index,
-        }
-    }
-}
-
-impl From<IntPointer> for Pointer {
-    fn from(value: IntPointer) -> Self {
-        Pointer {
-            into: value.into,
-            index: value.index,
-        }
     }
 }
 
@@ -311,12 +222,6 @@ impl Core<'_> {
         Ok(usize::from_be_bytes(bytes))
     }
 
-    pub fn get_int(&mut self, p: IntPointer) -> Res<i32> {
-        Ok(i32::from_le_bytes(
-            self.get_slice(Pointer::from(p), 4)?.try_into().at(self)?,
-        ))
-    }
-
     pub fn ensure_scratch(&mut self, size: usize) {
         if self.scratch.len() < size {
             self.scratch.resize(size, 0);
@@ -346,26 +251,6 @@ impl Core<'_> {
         }
         .message(|_| format!("Setting byte at {}", p))?;
         *dest = v;
-        Ok(())
-    }
-
-    pub fn set_int(&mut self, p: IntPointer, v: i32) -> Res<()> {
-        Pointer::from(p).debug(4);
-        match p.into {
-            PointerDest::Null => None,
-            PointerDest::Input => None,
-            PointerDest::Output => self.output.get_mut(p.index..p.index + 4),
-            PointerDest::Scratch => {
-                self.ensure_scratch(p.index + 4);
-                self.scratch.get_mut(p.index..p.index + 4)
-            }
-            PointerDest::Temp => {
-                self.ensure_tmp(p.index + 4);
-                self.tmp.get_mut(p.index..p.index + 4)
-            }
-        }
-        .message(|_| format!("Writing i32 to {}", p))?
-        .copy_from_slice(&v.to_le_bytes());
         Ok(())
     }
 
