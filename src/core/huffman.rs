@@ -2,7 +2,7 @@ use crate::core::error::End::Len;
 use crate::core::error::{ErrorContext, Res, ResultBuilder, SliceErrors, WithContext};
 use crate::core::pointer::Pointer;
 use crate::core::Core;
-use wide::u8x16;
+use wide::{u64x2, u8x16};
 
 pub const BASE_PREFIX: [usize; 12] = [
     0x0, 0x0, 0x2, 0x6, 0xE, 0x1E, 0x3E, 0x7E, 0xFE, 0x1FE, 0x2FE, 0x3FE,
@@ -190,8 +190,10 @@ pub struct HuffRevLut {
 
 impl Core<'_> {
     pub fn make_lut(&mut self, prefix_cur: &[usize; 12], syms: &[u8; 1280]) -> Res<HuffRevLut> {
-        let mut bits2len = [0u8; 2048 + 16];
-        let mut bits2sym = [0u8; 2048 + 16];
+        let mut len_lut = [0; 258];
+        let mut sym_lut = [0; 258];
+        let bits2len = bytemuck::cast_slice_mut(&mut len_lut);
+        let bits2sym = bytemuck::cast_slice_mut(&mut sym_lut);
         let mut currslot = 0;
         for i in 1..11u8 {
             #[allow(clippy::indexing_slicing)]
@@ -226,39 +228,40 @@ impl Core<'_> {
 
         self.assert_eq(currslot, 2048)?;
         Ok(HuffRevLut {
-            bits2len: reverse_lut(&bits2len),
-            bits2sym: reverse_lut(&bits2sym),
+            bits2len: reverse_lut(&len_lut),
+            bits2sym: reverse_lut(&sym_lut),
         })
     }
 }
 
 #[allow(unreachable_code)]
-pub fn reverse_lut(input: &[u8; 2064]) -> [u8; 2048] {
+pub fn reverse_lut(input: &[u64; 258]) -> [u8; 2048] {
     #[cfg(all(feature = "x86_sse", any(target_arch = "x86", target_arch = "x86_64")))]
-    return reverse_sse(input);
+    return reverse_sse(bytemuck::cast_slice(input).try_into().unwrap());
     return reverse_simd(input);
-    reverse_naive(input)
 }
 
 /// 2567.903645833333 ns/iter (+/- 149.404296875) on my machine
+#[allow(dead_code)]
 pub fn reverse_naive(input: &[u8; 2064]) -> [u8; 2048] {
     std::array::from_fn(|i| input[((i as u16).reverse_bits() >> 5) as usize])
 }
 
-/// 145.24246174617463 ns/iter (+/- 12.897633513351337) on my machine
-#[cfg(all(feature = "x86_sse", any(target_arch = "x86", target_arch = "x86_64")))]
-pub fn reverse_sse(input: &[u8; 2064]) -> [u8; 2048] {
+const OFFSETS: [usize; 32] = [
+    0x00, 0x80, 0x40, 0xC0, 0x20, 0xA0, 0x60, 0xE0, 0x10, 0x90, 0x50, 0xD0, 0x30, 0xB0, 0x70, 0xF0,
+    0x08, 0x88, 0x48, 0xC8, 0x28, 0xA8, 0x68, 0xE8, 0x18, 0x98, 0x58, 0xD8, 0x38, 0xB8, 0x78, 0xF8,
+];
+
+/// 136.1971197119712 ns/iter (+/- 13.9047404740474) on my machine
+#[allow(dead_code)]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub fn reverse_sse(input: &[u8; 2048 + 16]) -> [u8; 2048] {
     #[cfg(target_arch = "x86")]
     use std::arch::x86::*;
     #[cfg(target_arch = "x86_64")]
     use std::arch::x86_64::*;
     let mut result = [0; 2048];
     let mut output = &mut result[..];
-    const OFFSETS: [usize; 32] = [
-        0x00, 0x80, 0x40, 0xC0, 0x20, 0xA0, 0x60, 0xE0, 0x10, 0x90, 0x50, 0xD0, 0x30, 0xB0, 0x70,
-        0xF0, 0x08, 0x88, 0x48, 0xC8, 0x28, 0xA8, 0x68, 0xE8, 0x18, 0x98, 0x58, 0xD8, 0x38, 0xB8,
-        0x78, 0xF8,
-    ];
     for j in OFFSETS {
         unsafe {
             let t0 = _mm_unpacklo_epi8(
@@ -314,50 +317,47 @@ pub fn reverse_sse(input: &[u8; 2064]) -> [u8; 2048] {
     result
 }
 
-/// 176.2703125 ns/iter (+/- 30.97856249999998) on my machine
-pub fn reverse_simd(input: &[u8; 2064]) -> [u8; 2048] {
-    let mut result = [0; 2048];
+#[allow(clippy::indexing_slicing, clippy::missing_asserts_for_indexing)]
+/// 134.15224999999998 ns/iter (+/- 21.912999999999954) on my machine
+pub fn reverse_simd(input: &[u64; 258]) -> [u8; 2048] {
+    let mut result = [0; 256];
     let mut output = &mut result[..];
-    const OFFSETS: [usize; 32] = [
-        0x00, 0x80, 0x40, 0xC0, 0x20, 0xA0, 0x60, 0xE0, 0x10, 0x90, 0x50, 0xD0, 0x30, 0xB0, 0x70,
-        0xF0, 0x08, 0x88, 0x48, 0xC8, 0x28, 0xA8, 0x68, 0xE8, 0x18, 0x98, 0x58, 0xD8, 0x38, 0xB8,
-        0x78, 0xF8,
-    ];
     for offset in OFFSETS {
-        let i = &input[offset..];
-        let t: [u8x16; 8] = std::array::from_fn(|j| u8x16::from(&i[j * 256..][..16]));
-        let mut iter = t.chunks(2).map(|c| u8x16::unpack_low(c[0], c[1]));
-        let t: [_; 4] = std::array::from_fn(|_| iter.next().unwrap());
-        let mut iter = t.chunks(2).map(|c| {
+        let i = &input[offset / 8..];
+        let t: [u8x16; 8] = std::array::from_fn(|j| bytemuck::cast(u64x2::splat(i[j * 32])));
+        let mut iter = t.chunks_exact(2).map(|c| u8x16::unpack_low(c[0], c[1]));
+        let t: [_; 4] = std::array::from_fn(|_| iter.next().unwrap_or_default());
+        let mut iter = t.chunks_exact(2).map(|c| {
             [
                 u8x16::unpack_low(c[0], c[1]),
                 u8x16::unpack_high(c[0], c[1]),
             ]
         });
-        let t: [_; 2] = std::array::from_fn(|_| iter.next().unwrap());
+        let t: [_; 2] = std::array::from_fn(|_| iter.next().unwrap_or_default());
         let t = t
-            .chunks(2)
+            .chunks_exact(2)
             .map(|c| {
-                (
+                [
                     u8x16::unpack_low(c[0][0], c[1][0]),
                     u8x16::unpack_low(c[0][1], c[1][1]),
                     u8x16::unpack_high(c[0][0], c[1][0]),
                     u8x16::unpack_high(c[0][1], c[1][1]),
-                )
+                ]
+                .map(bytemuck::cast::<_, u64x2>)
             })
             .next()
-            .unwrap();
-        output[..8].copy_from_slice(&t.0.as_array_ref()[..8]);
-        output[1024..][..8].copy_from_slice(&t.0.as_array_ref()[8..]);
-        output[256..][..8].copy_from_slice(&t.1.as_array_ref()[..8]);
-        output[1280..][..8].copy_from_slice(&t.1.as_array_ref()[8..]);
-        output[512..][..8].copy_from_slice(&t.2.as_array_ref()[..8]);
-        output[1536..][..8].copy_from_slice(&t.2.as_array_ref()[8..]);
-        output[768..][..8].copy_from_slice(&t.3.as_array_ref()[..8]);
-        output[1792..][..8].copy_from_slice(&t.3.as_array_ref()[8..]);
-        output = &mut output[8..];
+            .unwrap_or_default();
+        output[0] = t[0].as_array_ref()[0];
+        output[128] = t[0].as_array_ref()[1];
+        output[32] = t[1].as_array_ref()[0];
+        output[160] = t[1].as_array_ref()[1];
+        output[64] = t[2].as_array_ref()[0];
+        output[192] = t[2].as_array_ref()[1];
+        output[96] = t[3].as_array_ref()[0];
+        output[224] = t[3].as_array_ref()[1];
+        output = &mut output[1..];
     }
-    result
+    bytemuck::cast(result)
 }
 
 #[cfg(test)]
@@ -370,11 +370,11 @@ mod tests {
     fn simd_test() {
         let input: [u8; 2064] = std::array::from_fn(|i| (i as u8).bitxor((i >> 8) as u8));
         let naive = reverse_naive(&input);
-        let simd = reverse_simd(&input);
-        #[cfg(all(feature = "x86_sse", any(target_arch = "x86", target_arch = "x86_64")))]
+        let simd = reverse_simd(bytemuck::cast_slice(input.as_slice()).try_into().unwrap());
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         let sse = reverse_sse(&input);
         for i in 1..2048 {
-            #[cfg(all(feature = "x86_sse", any(target_arch = "x86", target_arch = "x86_64")))]
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             assert_eq!(naive[i], sse[i], "{}", i);
             assert_eq!(naive[i], simd[i], "{}", i);
         }
