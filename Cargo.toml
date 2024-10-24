@@ -9,9 +9,12 @@ exclude = ["testdata", "verify"]
 
 [dependencies]
 bytemuck = "1.19.0"
+bytes = "1.8.0"
 log = "0.4.22"
 test-log = "0.2.16"
 wide = "0.7.28"
 
 [features]
 x86_sse = []
+async = []
+tokio = ["async"]

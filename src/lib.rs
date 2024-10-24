@@ -27,9 +27,11 @@ mod tests {
     };
 
     #[test_log::test]
+    #[allow(clippy::unwrap_used, clippy::panic)]
     fn it_works() {
         let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         d.push("testdata");
+        let mut extractor = Extractor::new();
         for path in fs::read_dir(d).unwrap() {
             let path = path.unwrap().path();
             let filename = path.file_stem().unwrap().to_str().unwrap().to_string();
@@ -48,8 +50,7 @@ mod tests {
             }
             let len = usize::from_le_bytes(buf);
             let buf = &mut vec![0; len];
-            let mut extractor = Extractor::new(file);
-            if let Err(e) = extractor.read(buf) {
+            if let Err(e) = extractor.read(&mut file, buf) {
                 log::error!("Extracting {}.{} failed: {}", filename, extension, e);
                 panic!();
             }

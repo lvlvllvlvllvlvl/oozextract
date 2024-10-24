@@ -44,6 +44,18 @@ impl From<OozError> for std::io::Error {
     }
 }
 
+impl From<std::io::Error> for OozError {
+    #[track_caller]
+    fn from(value: std::io::Error) -> Self {
+        Self {
+            message: Some(format!("IO error: {}", value)),
+            location: Location::caller(),
+            context: None,
+            source: None,
+        }
+    }
+}
+
 impl From<ErrorBuilder> for OozError {
     #[track_caller]
     fn from(

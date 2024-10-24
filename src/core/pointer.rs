@@ -1,5 +1,6 @@
 use crate::core::error::{ErrorBuilder, ErrorContext, Res, ResultBuilder, WithContext};
 use crate::core::Core;
+use crate::extractor::LARGE_BLOCK;
 use std::fmt::{Display, Formatter};
 use std::mem::size_of;
 
@@ -223,12 +224,18 @@ impl Core<'_> {
     }
 
     pub fn ensure_scratch(&mut self, size: usize) {
+        if self.scratch.is_empty() {
+            *self.scratch = vec![0; LARGE_BLOCK];
+        }
         if self.scratch.len() < size {
             self.scratch.resize(size, 0);
         }
     }
 
     pub fn ensure_tmp(&mut self, size: usize) {
+        if self.tmp.is_empty() {
+            *self.tmp = vec![0; LARGE_BLOCK];
+        }
         if self.tmp.len() < size {
             self.tmp.resize(size, 0);
         }

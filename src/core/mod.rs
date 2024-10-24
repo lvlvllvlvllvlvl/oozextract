@@ -10,14 +10,13 @@ use error::End::Idx;
 use error::{ErrorContext, Res, ResultBuilder, WithContext};
 use huffman::{HuffRange, HuffReader, BASE_PREFIX};
 use pointer::{Pointer, PointerDest};
-use std::fmt::Debug;
 use tans::TansDecoder;
 
 pub(crate) struct Core<'a> {
     pub input: &'a [u8],
     pub output: &'a mut [u8],
-    pub scratch: Vec<u8>,
-    pub tmp: Vec<u8>,
+    pub scratch: &'a mut Vec<u8>,
+    pub tmp: &'a mut Vec<u8>,
     pub src: Pointer,
     pub dst: Pointer,
     pub dst_end: Pointer,
@@ -27,14 +26,16 @@ impl Core<'_> {
     pub fn new<'a>(
         input: &'a [u8],
         output: &'a mut [u8],
+        scratch: &'a mut Vec<u8>,
+        tmp: &'a mut Vec<u8>,
         offset: usize,
         out_len: usize,
     ) -> Core<'a> {
         Core {
             input,
             output,
-            scratch: Vec::new(),
-            tmp: Vec::new(),
+            scratch,
+            tmp,
             src: Pointer::input(0),
             dst: Pointer::output(offset),
             dst_end: Pointer::output(offset + out_len),
@@ -43,7 +44,7 @@ impl Core<'_> {
 
     /// Decode one 256kb big quantum block. It's divided into two 128k blocks
     /// internally that are compressed separately but with a shared history.
-    pub fn decode_quantum<T: Algorithm + Debug>(&mut self, algorithm: T) -> Res<usize> {
+    pub fn decode_quantum<T: Algorithm>(&mut self, algorithm: T) -> Res<usize> {
         let mut written_bytes = 0;
         let src_end = Pointer::input(self.input.len());
         let dst_start = Pointer::output(0);
