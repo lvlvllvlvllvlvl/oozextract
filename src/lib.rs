@@ -18,6 +18,9 @@ pub use crate::extractor::Extractor;
 #[cfg(test)]
 mod tests {
     use crate::extractor::Extractor;
+    use bytes::{Buf, BytesMut};
+    use std::fs::File;
+    use std::future::Future;
     use std::io::Read;
     use std::{
         fs,
@@ -25,32 +28,129 @@ mod tests {
         path::PathBuf,
         time,
     };
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    use tokio::runtime::Runtime;
+    use tokio::task::JoinSet;
+    use tokio_util::io::ReaderStream;
 
     #[test_log::test]
-    #[allow(clippy::unwrap_used, clippy::panic)]
-    fn it_works() {
+    #[allow(clippy::unwrap_used)]
+    fn read() {
+        loop_files(|extractor, file, output| {
+            let mut buf = [0; 8];
+            file.read_exact(&mut buf)?;
+            log::debug!("header {:?}", buf);
+            if buf[4] == 0x8C {
+                buf[4..].fill_with(Default::default);
+                file.seek(SeekFrom::Start(4))?;
+            }
+            let len = u64::from_le_bytes(buf) as usize;
+            output.resize(len, 0);
+            extractor.read(file, output)?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test_log::test]
+    #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+    fn read_from_slice() {
+        loop_files(|extractor, file, output| {
+            let mut buf = Vec::new();
+            file.read_to_end(&mut buf)?;
+            let mut input = buf.as_slice();
+            assert!(input.len() > 8);
+            log::debug!("header {:?}", &input[..8]);
+            let len = if input[4] == 0x8C {
+                input.get_u32_le() as usize
+            } else {
+                input.get_u64_le() as usize
+            };
+            output.resize(len, 0);
+            extractor.read_from_slice(input, output)?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[cfg(feature = "tokio")]
+    #[test_log::test]
+    #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+    fn read_async() {
+        Runtime::new()
+            .unwrap()
+            .block_on(loop_files_async(Box::leak(Box::new(read_file_async))))
+            .unwrap();
+    }
+
+    #[cfg(feature = "tokio")]
+    async fn read_file_async(
+        mut file: tokio::fs::File,
+    ) -> Result<BytesMut, Box<dyn std::error::Error>> {
+        let mut buf = [0; 8];
+        file.read_exact(&mut buf).await?;
+        log::debug!("header {:?}", buf);
+        if buf[4] == 0x8C {
+            buf[4..].fill_with(Default::default);
+            file.seek(SeekFrom::Start(4)).await?;
+        }
+        let len = u64::from_le_bytes(buf) as usize;
+        let mut output = BytesMut::zeroed(len);
+        Extractor::new().async_read(&mut file, &mut output).await?;
+        Ok(output)
+    }
+
+    #[cfg(feature = "async")]
+    #[test_log::test]
+    #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+    fn read_stream() {
+        Runtime::new()
+            .unwrap()
+            .block_on(loop_files_async(Box::leak(Box::new(read_file_stream))))
+            .unwrap();
+    }
+
+    #[cfg(feature = "async")]
+    async fn read_file_stream(
+        mut file: tokio::fs::File,
+    ) -> Result<BytesMut, Box<dyn std::error::Error>> {
+        let mut buf = [0; 8];
+        file.read_exact(&mut buf).await?;
+        log::debug!("header {:?}", buf);
+        if buf[4] == 0x8C {
+            buf[4..].fill_with(Default::default);
+            file.seek(SeekFrom::Start(4)).await?;
+        }
+        let len = u64::from_le_bytes(buf) as usize;
+        let mut output = BytesMut::zeroed(len);
+        Extractor::new()
+            .async_stream(&mut ReaderStream::new(file), &mut output)
+            .await?;
+        Ok(output)
+    }
+
+    #[allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
+    fn loop_files(
+        mut extract: impl FnMut(
+            &mut Extractor,
+            &mut File,
+            &mut Vec<u8>,
+        ) -> Result<(), Box<dyn std::error::Error>>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         d.push("testdata");
         let mut extractor = Extractor::new();
-        for path in fs::read_dir(d).unwrap() {
-            let path = path.unwrap().path();
+        let mut buf = Vec::new();
+        for path in fs::read_dir(d)? {
+            let path = path?.path();
             let filename = path.file_stem().unwrap().to_str().unwrap().to_string();
             let extension = path.extension().unwrap().to_str().unwrap().to_string();
             // if extension != "bitknit" {
             //     continue;
             // }
+            let mut file = File::open(path)?;
             let start = time::Instant::now();
-            let mut file = fs::File::open(path).unwrap();
-            let mut buf = [0; 8];
-            file.read_exact(&mut buf).unwrap();
-            log::debug!("header {:?}", buf);
-            if buf[4] == 0x8C {
-                buf[4..].fill_with(Default::default);
-                file.seek(SeekFrom::Start(4)).unwrap();
-            }
-            let len = usize::from_le_bytes(buf);
-            let buf = &mut vec![0; len];
-            if let Err(e) = extractor.read(&mut file, buf) {
+            if let Err(e) = extract(&mut extractor, &mut file, &mut buf) {
                 log::error!("Extracting {}.{} failed: {}", filename, extension, e);
                 panic!();
             }
@@ -63,7 +163,7 @@ mod tests {
 
             let verify_file = format!("verify/{}", filename);
             log::debug!("compare to file {}", verify_file);
-            let expected = fs::read(verify_file).unwrap();
+            let expected = fs::read(verify_file)?;
             assert_eq!(buf.len(), expected.len());
             for (i, (actual, expect)) in buf.iter().zip(expected.iter()).enumerate() {
                 assert_eq!(
@@ -74,5 +174,59 @@ mod tests {
             }
         }
         log::debug!("done");
+        Ok(())
+    }
+
+    #[allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
+    async fn loop_files_async<
+        Fut: Send + Future<Output = Result<BytesMut, Box<dyn std::error::Error>>>,
+        Fun: Send + Sync + Fn(tokio::fs::File) -> Fut,
+    >(
+        extract: &'static Fun,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        d.push("testdata");
+        let mut tasks = JoinSet::new();
+        for path in fs::read_dir(d)? {
+            tasks.spawn(async {
+                let path = path.unwrap().path();
+                let filename = path.file_stem().unwrap().to_str().unwrap().to_string();
+                let extension = path.extension().unwrap().to_str().unwrap().to_string();
+                // if extension != "bitknit" {
+                //     continue;
+                // }
+                let file = tokio::fs::File::open(path).await.unwrap();
+                let start = time::Instant::now();
+                match extract(file).await {
+                    Ok(buf) => {
+                        log::info!(
+                            "Extracting {}.{} took {:?}",
+                            filename,
+                            extension,
+                            start.elapsed()
+                        );
+
+                        let verify_file = format!("verify/{}", filename);
+                        log::debug!("compare to file {}", verify_file);
+                        let expected = fs::read(verify_file).unwrap();
+                        assert_eq!(buf.len(), expected.len());
+                        for (i, (actual, expect)) in buf.iter().zip(expected.iter()).enumerate() {
+                            assert_eq!(
+                                actual, expect,
+                                "difference in {}.{} at byte {}",
+                                filename, extension, i
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Extracting {}.{} failed: {}", filename, extension, e);
+                        panic!();
+                    }
+                }
+            });
+        }
+        tasks.join_all().await;
+        log::debug!("done");
+        Ok(())
     }
 }

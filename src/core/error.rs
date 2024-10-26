@@ -24,16 +24,16 @@ impl Error for OozError {
 
 impl Display for OozError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DataError on line {}", self.location)?;
-        if let Some(context) = &self.context {
-            write!(f, " ({})", context)?
+        if let Some(cause) = &self.source {
+            Display::fmt(cause, f)?
         }
         if let Some(message) = &self.message {
-            write!(f, ": {}", message)?
+            f.write_str(message)?;
         }
-        if let Some(cause) = &self.source {
-            write!(f, "\ncaused by {}", cause)?
+        if let Some(context) = &self.context {
+            write!(f, "\n({})", context)?
         }
+        write!(f, "\nat {}", self.location)?;
         Ok(())
     }
 }
@@ -79,6 +79,23 @@ pub(crate) struct ErrorBuilder {
     pub message: Option<String>,
     pub context: Option<String>,
     pub source: Option<Box<dyn Error + Send + Sync>>,
+}
+
+#[cfg(feature = "async")]
+impl ErrorBuilder {
+    pub fn invert<T, E: Error + 'static + Send + Sync>(
+        option: Option<Result<T, E>>,
+    ) -> Result<Option<T>, Self> {
+        match option {
+            Some(Ok(v)) => Ok(Some(v)),
+            Some(Err(err)) => Err(Self {
+                message: None,
+                context: None,
+                source: Some(Box::new(err)),
+            })?,
+            None => Ok(None),
+        }
+    }
 }
 
 pub trait ResultBuilder<T>: Sized {
