@@ -1,0 +1,19 @@
+{
+  "name": "wasm-test",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest",
+    "bench": "vitest bench"
+  },
+  "devDependencies": {
+    "@types/node": "^22.8.1",
+    "ooz-wasm": "^2.0.0",
+    "typescript": "~5.6.2",
+    "vitest": "^2.1.3"
+  }
+}

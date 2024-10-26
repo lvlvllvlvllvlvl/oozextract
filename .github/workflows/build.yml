@@ -18,7 +18,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build
         run: |
-          cargo install cargo-all-features
+          cargo install cargo-all-features wasm-pack
           cargo build-all-features
+          wasm-pack build --target web --features wasm
+          npx wasm-pack-inline pkg --dir pkg/inline
       - name: Run tests
         run: cargo test --release --verbose --features tokio

@@ -75,6 +75,7 @@ pub enum QuantumHeader {
     Uncompressed,
 }
 
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 #[derive(Default)]
 pub struct Extractor {
     pos: usize,
@@ -84,6 +85,30 @@ pub struct Extractor {
     scratch: Vec<u8>,
     tmp: Vec<u8>,
     buf: bytes::BytesMut,
+}
+
+#[cfg(feature = "wasm")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+impl Extractor {
+    pub fn extract(
+        &mut self,
+        input: Vec<u8>,
+        output_size: usize,
+    ) -> Result<Vec<u8>, wasm_bindgen::JsError> {
+        let mut output = vec![0; output_size];
+        self.read_from_slice(input.as_ref(), output.as_mut())?;
+        Ok(output)
+    }
+}
+
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
+impl Extractor {
+    pub fn new() -> Extractor {
+        Extractor {
+            buf: bytes::BytesMut::zeroed(LARGE_BLOCK),
+            ..Default::default()
+        }
+    }
 }
 
 impl Extractor {
@@ -142,13 +167,6 @@ impl Extractor {
 }
 
 impl Extractor {
-    pub fn new() -> Extractor {
-        Extractor {
-            buf: bytes::BytesMut::zeroed(LARGE_BLOCK),
-            ..Default::default()
-        }
-    }
-
     fn read_sync<R: AsRef<[u8]>, In: Input<R>>(
         &mut self,
         input: &mut In,
@@ -164,7 +182,7 @@ impl Extractor {
             }
             log::debug!("Parsed header {:?}", self.header);
             match self
-                .extract(input, output, bytes_written)
+                .extract_block(input, output, bytes_written)
                 .now_or_never()
                 .expect("Read is not async")?
             {
@@ -191,7 +209,7 @@ impl Extractor {
                 self.parse_header(input).await?
             }
             log::debug!("Parsed header {:?}", self.header);
-            match self.extract(input, output, bytes_written).await? {
+            match self.extract_block(input, output, bytes_written).await? {
                 0 => break,
                 count => {
                     bytes_written += count;
@@ -202,7 +220,7 @@ impl Extractor {
         Ok(bytes_written)
     }
 
-    async fn extract<S: AsRef<[u8]>, In: Input<S>>(
+    async fn extract_block<S: AsRef<[u8]>, In: Input<S>>(
         &mut self,
         input: &mut In,
         output: &mut [u8],

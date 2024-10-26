@@ -7,6 +7,10 @@ edition = "2021"
 license = "MIT"
 exclude = ["testdata", "verify"]
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+
 [dependencies]
 bytemuck = "1.19.0"
 bytes = "1.8.0"
@@ -14,6 +18,7 @@ futures = "0.3.31"
 log = "0.4.22"
 test-log = "0.2.16"
 tokio = { version = "1.41.0", optional = true, features = ["io-util"] }
+wasm-bindgen = { version = "0.2.95", optional = true }
 wide = "0.7.28"
 
 [dev-dependencies]
@@ -29,3 +34,4 @@ harness = false
 x86_sse = []
 async = []
 tokio = ["async", "dep:tokio"]
+wasm = ["dep:wasm-bindgen"]

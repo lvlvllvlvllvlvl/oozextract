@@ -564,6 +564,7 @@ dependencies = [
  "test-log",
  "tokio",
  "tokio-util",
+ "wasm-bindgen",
  "wide",
 ]
 
