@@ -23,11 +23,12 @@ pub fn reverse_huff_lut(c: &mut Criterion) {
     group.bench_function("naive", |b| {
         b.iter(|| oozextract::reverse_naive(black_box(&input)))
     });
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     group.bench_function("native", |b| {
-        b.iter(|| oozextract::reverse_sse(black_box(&input)))
+        b.iter(|| oozextract::reverse_x86(black_box(&input)))
     });
     group.bench_function("wide", |b| {
-        b.iter(|| oozextract::reverse_simd(black_box(&aligned_input)))
+        b.iter(|| oozextract::reverse_portable(black_box(&aligned_input)))
     });
 }
 

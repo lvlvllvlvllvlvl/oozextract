@@ -237,8 +237,8 @@ impl Core<'_> {
 #[allow(unreachable_code)]
 pub fn reverse_lut(input: &[u64; 258]) -> [u8; 2048] {
     #[cfg(all(feature = "x86_sse", any(target_arch = "x86", target_arch = "x86_64")))]
-    return reverse_sse(bytemuck::cast_slice(input).try_into().unwrap());
-    return reverse_simd(input);
+    return reverse_x86(bytemuck::cast_slice(input).try_into().unwrap());
+    reverse_portable(input)
 }
 
 /// 2567.903645833333 ns/iter (+/- 149.404296875) on my machine
@@ -255,7 +255,7 @@ const OFFSETS: [usize; 32] = [
 /// 136.1971197119712 ns/iter (+/- 13.9047404740474) on my machine
 #[allow(dead_code)]
 #[cfg(all(feature = "x86_sse", any(target_arch = "x86", target_arch = "x86_64")))]
-pub fn reverse_sse(input: &[u8; 2048 + 16]) -> [u8; 2048] {
+pub fn reverse_x86(input: &[u8; 2048 + 16]) -> [u8; 2048] {
     #[cfg(target_arch = "x86")]
     use std::arch::x86::*;
     #[cfg(target_arch = "x86_64")]
@@ -319,7 +319,7 @@ pub fn reverse_sse(input: &[u8; 2048 + 16]) -> [u8; 2048] {
 
 #[allow(clippy::indexing_slicing, clippy::missing_asserts_for_indexing)]
 /// 134.15224999999998 ns/iter (+/- 21.912999999999954) on my machine
-pub fn reverse_simd(input: &[u64; 258]) -> [u8; 2048] {
+pub fn reverse_portable(input: &[u64; 258]) -> [u8; 2048] {
     let mut result = [0; 256];
     let mut output = &mut result[..];
     for offset in OFFSETS {
@@ -370,11 +370,11 @@ mod tests {
     fn simd_test() {
         let input: [u8; 2064] = std::array::from_fn(|i| (i as u8).bitxor((i >> 8) as u8));
         let naive = reverse_naive(&input);
-        let simd = reverse_simd(bytemuck::cast_slice(input.as_slice()).try_into().unwrap());
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-        let sse = reverse_sse(&input);
+        let simd = reverse_portable(bytemuck::cast_slice(input.as_slice()).try_into().unwrap());
+        #[cfg(all(feature = "x86_sse", any(target_arch = "x86", target_arch = "x86_64")))]
+        let sse = reverse_x86(&input);
         for i in 1..2048 {
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(all(feature = "x86_sse", any(target_arch = "x86", target_arch = "x86_64")))]
             assert_eq!(naive[i], sse[i], "{}", i);
             assert_eq!(naive[i], simd[i], "{}", i);
         }
