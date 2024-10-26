@@ -12,8 +12,8 @@ mod extractor;
 
 pub use crate::extractor::Extractor;
 
-// used by benches/huffman.rs:
-//pub use crate::core::huffman::{reverse_naive, reverse_simd, reverse_sse};
+#[cfg(feature = "x86_sse")]
+pub use crate::core::huffman::{reverse_naive, reverse_simd, reverse_sse};
 
 #[cfg(test)]
 mod tests {

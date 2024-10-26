@@ -254,7 +254,7 @@ const OFFSETS: [usize; 32] = [
 
 /// 136.1971197119712 ns/iter (+/- 13.9047404740474) on my machine
 #[allow(dead_code)]
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(feature = "x86_sse", any(target_arch = "x86", target_arch = "x86_64")))]
 pub fn reverse_sse(input: &[u8; 2048 + 16]) -> [u8; 2048] {
     #[cfg(target_arch = "x86")]
     use std::arch::x86::*;

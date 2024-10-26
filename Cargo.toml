@@ -17,8 +17,13 @@ tokio = { version = "1.41.0", optional = true, features = ["io-util"] }
 wide = "0.7.28"
 
 [dev-dependencies]
+criterion = "0.5.1"
 tokio = { version = "1.41.0", features = ["full"] }
 tokio-util = { version = "0.7.12", features = ["io"] }
+
+[[bench]]
+name = "criterion"
+harness = false
 
 [features]
 x86_sse = []
