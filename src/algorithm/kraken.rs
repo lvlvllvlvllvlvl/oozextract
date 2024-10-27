@@ -290,7 +290,7 @@ impl KrakenLzTable {
                 dst += matchlen + 2;
             } else {
                 // why is the value not 16 here, the above case copies up to 16 bytes.
-                matchlen = (14 + len_stream.next().err()?).try_into().at(self)?;
+                matchlen = (14 + len_stream.next().err()?) as usize;
                 core.repeat_copy_64(dst, copyfrom, matchlen).at(self)?;
                 dst += matchlen;
             }

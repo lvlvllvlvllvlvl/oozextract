@@ -18,8 +18,9 @@ pub use crate::core::huffman::{reverse_naive, reverse_portable, reverse_x86};
 #[cfg(test)]
 mod tests {
     use crate::extractor::Extractor;
-    use bytes::{Buf, BytesMut};
+    use bytes::Buf;
     use std::fs::File;
+    #[cfg(feature = "async")]
     use std::future::Future;
     use std::io::Read;
     use std::{
@@ -28,9 +29,13 @@ mod tests {
         path::PathBuf,
         time,
     };
+    #[cfg(feature = "async")]
     use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    #[cfg(feature = "async")]
     use tokio::runtime::Runtime;
+    #[cfg(feature = "async")]
     use tokio::task::JoinSet;
+    #[cfg(feature = "async")]
     use tokio_util::io::ReaderStream;
 
     #[test_log::test]
@@ -86,7 +91,7 @@ mod tests {
     #[cfg(feature = "tokio")]
     async fn read_file_async(
         mut file: tokio::fs::File,
-    ) -> Result<BytesMut, Box<dyn std::error::Error>> {
+    ) -> Result<bytes::BytesMut, Box<dyn std::error::Error>> {
         let mut buf = [0; 8];
         file.read_exact(&mut buf).await?;
         log::debug!("header {:?}", buf);
@@ -95,7 +100,7 @@ mod tests {
             file.seek(SeekFrom::Start(4)).await?;
         }
         let len = u64::from_le_bytes(buf) as usize;
-        let mut output = BytesMut::zeroed(len);
+        let mut output = bytes::BytesMut::zeroed(len);
         Extractor::new().async_read(&mut file, &mut output).await?;
         Ok(output)
     }
@@ -113,7 +118,7 @@ mod tests {
     #[cfg(feature = "async")]
     async fn read_file_stream(
         mut file: tokio::fs::File,
-    ) -> Result<BytesMut, Box<dyn std::error::Error>> {
+    ) -> Result<bytes::BytesMut, Box<dyn std::error::Error>> {
         let mut buf = [0; 8];
         file.read_exact(&mut buf).await?;
         log::debug!("header {:?}", buf);
@@ -122,7 +127,7 @@ mod tests {
             file.seek(SeekFrom::Start(4)).await?;
         }
         let len = u64::from_le_bytes(buf) as usize;
-        let mut output = BytesMut::zeroed(len);
+        let mut output = bytes::BytesMut::zeroed(len);
         Extractor::new()
             .async_stream(&mut ReaderStream::new(file), &mut output)
             .await?;
@@ -177,9 +182,10 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "async")]
     #[allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
     async fn loop_files_async<
-        Fut: Send + Future<Output = Result<BytesMut, Box<dyn std::error::Error>>>,
+        Fut: Send + Future<Output = Result<bytes::BytesMut, Box<dyn std::error::Error>>>,
         Fun: Send + Sync + Fn(tokio::fs::File) -> Fut,
     >(
         extract: &'static Fun,

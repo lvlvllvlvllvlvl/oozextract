@@ -112,6 +112,7 @@ impl<
             }
         }
         Err(ErrorBuilder {
+            #[cfg(feature = "verbose_errors")]
             message: Some("Unexpected end of stream".into()),
             ..Default::default()
         })?

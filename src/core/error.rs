@@ -1,29 +1,35 @@
 use std::error::Error;
-use std::fmt::{Debug, Display, Formatter};
-use std::ops::Deref;
-use std::panic::Location;
+use std::fmt::{Debug, Display};
 
+#[cfg(feature = "verbose_errors")]
 #[derive(Debug)]
 pub struct OozError {
     pub message: Option<String>,
     pub context: Option<String>,
     pub source: Option<Box<dyn Error + Send + Sync>>,
-    pub location: &'static Location<'static>,
+    pub location: &'static std::panic::Location<'static>,
 }
+
+#[cfg(not(feature = "verbose_errors"))]
+#[derive(Debug)]
+pub struct OozError;
 
 pub type Res<T> = Result<T, OozError>;
 
+#[cfg(feature = "verbose_errors")]
 impl Error for OozError {
+    #[cfg(feature = "verbose_errors")]
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self.source {
-            Some(ref err) => Some(err.deref()),
+            Some(ref err) => Some(std::ops::Deref::deref(err)),
             None => None,
         }
     }
 }
 
+#[cfg(feature = "verbose_errors")]
 impl Display for OozError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(cause) = &self.source {
             Display::fmt(cause, f)?
         }
@@ -39,24 +45,37 @@ impl Display for OozError {
 }
 
 impl From<OozError> for std::io::Error {
+    #[cfg(feature = "verbose_errors")]
     fn from(value: OozError) -> Self {
         std::io::Error::new(std::io::ErrorKind::InvalidData, value)
+    }
+
+    #[cfg(not(feature = "verbose_errors"))]
+    fn from(_: OozError) -> Self {
+        std::io::ErrorKind::InvalidData.into()
     }
 }
 
 impl From<std::io::Error> for OozError {
+    #[cfg(feature = "verbose_errors")]
     #[track_caller]
     fn from(value: std::io::Error) -> Self {
         Self {
             message: Some(format!("IO error: {}", value)),
-            location: Location::caller(),
+            location: std::panic::Location::caller(),
             context: None,
             source: None,
         }
     }
+
+    #[cfg(not(feature = "verbose_errors"))]
+    fn from(_: std::io::Error) -> Self {
+        Self
+    }
 }
 
 impl From<ErrorBuilder> for OozError {
+    #[cfg(feature = "verbose_errors")]
     #[track_caller]
     fn from(
         ErrorBuilder {
@@ -69,15 +88,23 @@ impl From<ErrorBuilder> for OozError {
             message,
             context,
             source,
-            location: Location::caller(),
+            location: std::panic::Location::caller(),
         }
+    }
+
+    #[cfg(not(feature = "verbose_errors"))]
+    fn from(_: ErrorBuilder) -> Self {
+        Self
     }
 }
 
 #[derive(Default)]
 pub(crate) struct ErrorBuilder {
+    #[cfg(feature = "verbose_errors")]
     pub message: Option<String>,
+    #[cfg(feature = "verbose_errors")]
     pub context: Option<String>,
+    #[cfg(feature = "verbose_errors")]
     pub source: Option<Box<dyn Error + Send + Sync>>,
 }
 
@@ -88,10 +115,13 @@ impl ErrorBuilder {
     ) -> Result<Option<T>, Self> {
         match option {
             Some(Ok(v)) => Ok(Some(v)),
-            Some(Err(err)) => Err(Self {
+            Some(Err(_err)) => Err(Self {
+                #[cfg(feature = "verbose_errors")]
                 message: None,
+                #[cfg(feature = "verbose_errors")]
                 context: None,
-                source: Some(Box::new(err)),
+                #[cfg(feature = "verbose_errors")]
+                source: Some(Box::new(_err)),
             })?,
             None => Ok(None),
         }
@@ -107,11 +137,12 @@ pub trait ResultBuilder<T>: Sized {
 }
 
 impl<T> ResultBuilder<T> for Result<T, ErrorBuilder> {
-    fn message<F: FnOnce(Option<&str>) -> String>(self, msg: F) -> Self {
+    fn message<F: FnOnce(Option<&str>) -> String>(self, _msg: F) -> Self {
         match self {
             Ok(v) => Ok(v),
             Err(e) => Err(ErrorBuilder {
-                message: Some(msg(e.message.as_deref())),
+                #[cfg(feature = "verbose_errors")]
+                message: Some(_msg(e.message.as_deref())),
                 ..e
             }),
         }
@@ -123,21 +154,23 @@ impl<T> ResultBuilder<T> for Result<T, ErrorBuilder> {
 }
 
 impl<T> ResultBuilder<T> for Option<T> {
-    fn message<F: FnOnce(Option<&str>) -> String>(self, msg: F) -> Result<T, ErrorBuilder> {
+    fn message<F: FnOnce(Option<&str>) -> String>(self, _msg: F) -> Result<T, ErrorBuilder> {
         match self {
             Some(v) => Ok(v),
             None => Err(ErrorBuilder {
-                message: Some(msg(None)),
+                #[cfg(feature = "verbose_errors")]
+                message: Some(_msg(None)),
                 ..Default::default()
             }),
         }
     }
 
-    fn msg_of<M: Debug>(self, msg: &M) -> Result<T, ErrorBuilder> {
+    fn msg_of<M: Debug>(self, _msg: &M) -> Result<T, ErrorBuilder> {
         match self {
             Some(v) => Ok(v),
             None => Err(ErrorBuilder {
-                message: Some(format!("{:?}", msg)),
+                #[cfg(feature = "verbose_errors")]
+                message: Some(format!("{:?}", _msg)),
                 ..Default::default()
             }),
         }
@@ -151,28 +184,40 @@ impl<T> ResultBuilder<T> for Option<T> {
     }
 }
 
-pub(crate) trait WithContext<T, E: Error, C: ErrorContext> {
+pub(crate) trait WithContext<T, E, C: ErrorContext> {
     fn at(self, context: &C) -> Result<T, ErrorBuilder>;
 }
 
 impl<T, E: Error + 'static + Send + Sync, C: ErrorContext> WithContext<T, E, C> for Result<T, E> {
-    fn at(self, context: &C) -> Result<T, ErrorBuilder> {
-        self.map_err(|e| ErrorBuilder {
-            context: context.describe(),
-            source: Some(Box::new(e)),
+    fn at(self, _context: &C) -> Result<T, ErrorBuilder> {
+        self.map_err(|_e| ErrorBuilder {
+            #[cfg(feature = "verbose_errors")]
+            context: _context.describe(),
+            #[cfg(feature = "verbose_errors")]
+            source: Some(Box::new(_e)),
             ..Default::default()
         })
     }
 }
 
+#[cfg(not(feature = "verbose_errors"))]
+impl<T, C: ErrorContext> WithContext<T, OozError, C> for Result<T, OozError> {
+    fn at(self, _context: &C) -> Result<T, ErrorBuilder> {
+        self.map_err(|_e| Default::default())
+    }
+}
+
 pub(crate) trait ErrorContext {
+    #[allow(dead_code)]
     fn describe(&self) -> Option<String> {
         None
     }
 
-    fn raise<T>(&self, msg: String) -> Result<T, ErrorBuilder> {
+    fn raise<T>(&self, _msg: String) -> Result<T, ErrorBuilder> {
         Err(ErrorBuilder {
-            message: Some(msg),
+            #[cfg(feature = "verbose_errors")]
+            message: Some(_msg),
+            #[cfg(feature = "verbose_errors")]
             context: self.describe(),
             ..Default::default()
         })
@@ -184,17 +229,19 @@ pub(crate) trait ErrorContext {
         start: usize,
         end: End,
     ) -> Result<&'a mut [T], ErrorBuilder> {
-        let len = slice.len();
+        let _len = slice.len();
         match end {
             End::Idx(i) => slice.get_mut(start..i),
             End::Len(l) => slice.get_mut(start..start + l),
             //End::Open => slice.get_mut(start..),
         }
         .ok_or_else(|| ErrorBuilder {
+            #[cfg(feature = "verbose_errors")]
             message: Some(format!(
                 "Error getting {}..{:?} from slice with length {}",
-                start, end, len
+                start, end, _len
             )),
+            #[cfg(feature = "verbose_errors")]
             context: self.describe(),
             ..Default::default()
         })
@@ -249,6 +296,7 @@ pub(crate) trait SliceErrors<T> {
 impl<T: Copy> SliceErrors<T> for [T] {
     fn get_copy(&self, i: usize) -> Result<T, ErrorBuilder> {
         self.get(i).copied().ok_or_else(|| ErrorBuilder {
+            #[cfg(feature = "verbose_errors")]
             message: Some(format!(
                 "Error getting {} from slice with length {}",
                 i,
@@ -258,16 +306,17 @@ impl<T: Copy> SliceErrors<T> for [T] {
         })
     }
     fn slice_mut(&mut self, start: usize, end: End) -> Result<&mut Self, ErrorBuilder> {
-        let len = self.len();
+        let _len = self.len();
         match end {
             End::Idx(i) => self.get_mut(start..i),
             End::Len(l) => self.get_mut(start..start + l),
             //End::Open => slice.get_mut(start..),
         }
         .ok_or_else(|| ErrorBuilder {
+            #[cfg(feature = "verbose_errors")]
             message: Some(format!(
                 "Error getting {}..{:?} from slice with length {}",
-                start, end, len
+                start, end, _len
             )),
             ..Default::default()
         })

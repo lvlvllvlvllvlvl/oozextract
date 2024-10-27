@@ -296,6 +296,7 @@ impl Core<'_> {
             };
             if src.index.max(dest.index) + bytes > buf.len() {
                 Err(ErrorBuilder {
+                    #[cfg(feature = "verbose_errors")]
                     message: Some(format!("{}, {}, {}, {}", bytes, src, dest, buf.len())),
                     ..Default::default()
                 })?

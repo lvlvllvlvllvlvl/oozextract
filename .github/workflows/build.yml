@@ -21,6 +21,6 @@ jobs:
           cargo install cargo-all-features wasm-pack
           cargo build-all-features
           wasm-pack build --target web --features wasm
-          npx wasm-pack-inline pkg --dir pkg/inline
+          npx -y wasm-pack-inline pkg --dir pkg/inline
       - name: Run tests
         run: cargo test --release --verbose --features tokio

@@ -10,7 +10,6 @@ exclude = ["testdata", "verify"]
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-
 [dependencies]
 bytemuck = "1.19.0"
 bytes = "1.8.0"
@@ -29,9 +28,11 @@ tokio-util = { version = "0.7.12", features = ["io"] }
 [[bench]]
 name = "criterion"
 harness = false
+required-features = ["x86_sse"]
 
 [features]
 x86_sse = []
 async = []
 tokio = ["async", "dep:tokio"]
 wasm = ["dep:wasm-bindgen"]
+verbose_errors = []
