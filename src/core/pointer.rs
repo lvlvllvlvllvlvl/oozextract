@@ -246,6 +246,32 @@ impl Core<'_> {
         Ok(())
     }
 
+    /// llvm prefetch intrinsic is only made available on x86 (via _mm_prefetch),
+    /// for any other arch this function is just a placeholder
+    pub fn prefetch<const SRC: u8>(&mut self, p: Pointer<SRC>) {
+        let target = match p.dest() {
+            PointerDest::Null => panic!(),
+            PointerDest::Input => self.input,
+            PointerDest::Output => self.output,
+            PointerDest::Scratch => self.scratch,
+            PointerDest::Temp => self.tmp,
+        }
+        .get(p.index);
+
+        #[cfg(all(feature = "x86_sse", any(target_arch = "x86", target_arch = "x86_64")))]
+        if let Some(v) = target {
+            #[cfg(target_arch = "x86")]
+            use core::arch::x86::*;
+            #[cfg(target_arch = "x86_64")]
+            use core::arch::x86_64::*;
+
+            let addr = (v as *const u8).cast();
+            unsafe {
+                _mm_prefetch::<{ _MM_HINT_T0 }>(addr);
+            }
+        }
+    }
+
     /// copies 8 bytes at a time from src into dest, including previously copied bytes if ranges overlap
     pub fn repeat_copy_64<const DEST: u8, const SRC: u8>(
         &mut self,

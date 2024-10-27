@@ -55,6 +55,7 @@ impl<const SRC: u8, const DST: u8> HuffReader<SRC, DST> {
             dst_end -= 5;
             src_end -= 4;
 
+            let mut tmp = [0; 8];
             while dst < dst_end && src <= src_mid && src_mid <= src_end {
                 src_bits |= (core.get_le_bytes(src, 4).at(core)? as u32) << src_bitpos;
                 src += (31 - src_bitpos) >> 3;
@@ -73,37 +74,39 @@ impl<const SRC: u8, const DST: u8> HuffReader<SRC, DST> {
                 n = lut.bits2len.get_copy(k)?;
                 src_bits >>= n as u32;
                 src_bitpos -= n as i32;
-                core.set(dst + 0, lut.bits2sym.get_copy(k)?).at(self)?;
+                tmp[0] = lut.bits2sym.get_copy(k)?;
 
                 k = (src_end_bits & 0x7FF) as _;
                 n = lut.bits2len.get_copy(k)?;
                 src_end_bits >>= n as u32;
                 src_end_bitpos -= n as i32;
-                core.set(dst + 1, lut.bits2sym.get_copy(k)?).at(self)?;
+                tmp[1] = lut.bits2sym.get_copy(k)?;
 
                 k = (src_mid_bits & 0x7FF) as _;
                 n = lut.bits2len.get_copy(k)?;
                 src_mid_bits >>= n as u32;
                 src_mid_bitpos -= n as i32;
-                core.set(dst + 2, lut.bits2sym.get_copy(k)?).at(self)?;
+                tmp[2] = lut.bits2sym.get_copy(k)?;
 
                 k = (src_bits & 0x7FF) as _;
                 n = lut.bits2len.get_copy(k)?;
                 src_bits >>= n as u32;
                 src_bitpos -= n as i32;
-                core.set(dst + 3, lut.bits2sym.get_copy(k)?).at(self)?;
+                tmp[3] = lut.bits2sym.get_copy(k)?;
 
                 k = (src_end_bits & 0x7FF) as _;
                 n = lut.bits2len.get_copy(k)?;
                 src_end_bits >>= n as u32;
                 src_end_bitpos -= n as i32;
-                core.set(dst + 4, lut.bits2sym.get_copy(k)?).at(self)?;
+                tmp[4] = lut.bits2sym.get_copy(k)?;
 
                 k = (src_mid_bits & 0x7FF) as _;
                 n = lut.bits2len.get_copy(k)?;
                 src_mid_bits >>= n as u32;
                 src_mid_bitpos -= n as i32;
-                core.set(dst + 5, lut.bits2sym.get_copy(k)?).at(self)?;
+                tmp[5] = lut.bits2sym.get_copy(k)?;
+
+                core.set_bytes(dst, &tmp).at(self)?;
                 dst += 6;
             }
             dst_end += 5;

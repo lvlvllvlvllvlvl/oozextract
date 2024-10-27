@@ -212,7 +212,9 @@ impl MermaidLzTable {
                 assert!((dst_end - dst) >= length);
                 core.repeat_copy_64(dst, offs_ptr, length).at(self)?;
                 dst += length;
-                //simde_mm_prefetch((char*)dst_begin - off32_stream[3], SIMDE_MM_HINT_T0);
+                if let Some(&offset) = self.off32().get(off32_stream + 3) {
+                    core.prefetch(dst_begin - offset);
+                }
             } else if cmd == 0 {
                 self.assert_lt(length_stream, src_end)?;
                 length = core.get_byte(length_stream).at(self)? as usize;
@@ -270,7 +272,9 @@ impl MermaidLzTable {
                 recent_offs = offs_ptr.index as i32 - dst.index as i32;
                 core.repeat_copy_64(dst, offs_ptr, length).at(self)?;
                 dst += length;
-                //simde_mm_prefetch((char*)dst_begin - off32_stream[3], SIMDE_MM_HINT_T0);
+                if let Some(&offset) = self.off32().get(off32_stream + 3) {
+                    core.prefetch(dst_begin - offset);
+                }
             }
         }
 
@@ -434,18 +438,7 @@ impl MermaidLzTable {
             }
 
             self.off32_stream_1.reserve(off32_size_1);
-            // store dummy bytes after for simde_mm_prefetch.
-            // ((uint64*)scratch)[0] = 0;
-            // ((uint64*)scratch)[1] = 0;
-            // ((uint64*)scratch)[2] = 0;
-            // ((uint64*)scratch)[3] = 0;
-
             self.off32_stream_2.reserve(off32_size_2);
-            // store dummy bytes after for simde_mm_prefetch.
-            // ((uint64*)scratch)[0] = 0;
-            // ((uint64*)scratch)[1] = 0;
-            // ((uint64*)scratch)[2] = 0;
-            // ((uint64*)scratch)[3] = 0;
 
             src += self
                 .decode_far_offsets(core, src, src_end, true, off32_size_1, offset)
