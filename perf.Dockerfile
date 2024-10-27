@@ -8,4 +8,5 @@ VOLUME /build/target
 
 ENV CARGO_PROFILE_RELEASE_DEBUG=true
 WORKDIR /build
-CMD ["cargo", "flamegraph", "--unit-test", "--", "tests::it_works"]
+
+CMD ["cargo", "flamegraph", "--bench", "criterion", "--features=x86_sse"]

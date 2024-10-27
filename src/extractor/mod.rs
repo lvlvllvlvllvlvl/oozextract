@@ -76,14 +76,13 @@ pub enum QuantumHeader {
 }
 
 #[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
-#[derive(Default)]
 pub struct Extractor {
     pos: usize,
     header: BlockHeader,
     bitknit_state: Option<BitknitState>,
     lzna_state: Option<LznaState>,
-    scratch: Vec<u8>,
-    tmp: Vec<u8>,
+    scratch: Box<[u8; LARGE_BLOCK]>,
+    tmp: Box<[u8; LARGE_BLOCK]>,
     buf: bytes::BytesMut,
 }
 
@@ -105,8 +104,13 @@ impl Extractor {
 impl Extractor {
     pub fn new() -> Extractor {
         Extractor {
+            pos: 0,
+            header: Default::default(),
+            bitknit_state: None,
+            lzna_state: None,
+            scratch: Box::new([0; LARGE_BLOCK]),
+            tmp: Box::new([0; LARGE_BLOCK]),
             buf: bytes::BytesMut::zeroed(LARGE_BLOCK),
-            ..Default::default()
         }
     }
 }
@@ -444,8 +448,8 @@ impl Extractor {
         Core::new(
             input,
             output,
-            &mut self.scratch,
-            &mut self.tmp,
+            self.scratch.as_mut(),
+            self.tmp.as_mut(),
             offset,
             dst_bytes_left,
         )

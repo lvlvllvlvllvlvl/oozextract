@@ -15,8 +15,8 @@ use tans::TansDecoder;
 pub(crate) struct Core<'a> {
     pub input: &'a [u8],
     pub output: &'a mut [u8],
-    pub scratch: &'a mut Vec<u8>,
-    pub tmp: &'a mut Vec<u8>,
+    pub scratch: &'a mut [u8],
+    pub tmp: &'a mut [u8],
     pub src: Pointer<{ PointerDest::INPUT }>,
     pub dst: Pointer<{ PointerDest::OUTPUT }>,
     pub dst_end: Pointer<{ PointerDest::OUTPUT }>,
@@ -26,8 +26,8 @@ impl Core<'_> {
     pub fn new<'a>(
         input: &'a [u8],
         output: &'a mut [u8],
-        scratch: &'a mut Vec<u8>,
-        tmp: &'a mut Vec<u8>,
+        scratch: &'a mut [u8],
+        tmp: &'a mut [u8],
         offset: usize,
         out_len: usize,
     ) -> Core<'a> {

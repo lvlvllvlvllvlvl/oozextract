@@ -1,6 +1,5 @@
 use crate::core::error::{ErrorBuilder, ErrorContext, Res, ResultBuilder, WithContext};
 use crate::core::Core;
-use crate::extractor::LARGE_BLOCK;
 use std::fmt::{Display, Formatter};
 use std::mem::size_of;
 
@@ -209,14 +208,8 @@ impl Core<'_> {
             PointerDest::Null => panic!(),
             PointerDest::Input => self.input.get(p.index..p.index + n),
             PointerDest::Output => self.output.get(p.index..p.index + n),
-            PointerDest::Scratch => {
-                self.ensure_scratch(p.index + n);
-                self.scratch.get(p.index..p.index + n)
-            }
-            PointerDest::Temp => {
-                self.ensure_tmp(p.index + n);
-                self.tmp.get(p.index..p.index + n)
-            }
+            PointerDest::Scratch => self.scratch.get(p.index..p.index + n),
+            PointerDest::Temp => self.tmp.get(p.index..p.index + n),
         }
         .message(|_| format!("oob {}..{}", p, p.index + n))?)
     }
@@ -232,38 +225,14 @@ impl Core<'_> {
         Ok(usize::from_be_bytes(bytes))
     }
 
-    pub fn ensure_scratch(&mut self, size: usize) {
-        if self.scratch.is_empty() {
-            *self.scratch = vec![0; LARGE_BLOCK];
-        }
-        if self.scratch.len() < size {
-            self.scratch.resize(size, 0);
-        }
-    }
-
-    pub fn ensure_tmp(&mut self, size: usize) {
-        if self.tmp.is_empty() {
-            *self.tmp = vec![0; LARGE_BLOCK];
-        }
-        if self.tmp.len() < size {
-            self.tmp.resize(size, 0);
-        }
-    }
-
     pub fn set<const DEST: u8>(&mut self, p: Pointer<DEST>, v: u8) -> Res<()> {
         p.debug(1);
         let dest = match p.dest() {
             PointerDest::Null => None,
             PointerDest::Input => None,
             PointerDest::Output => self.output.get_mut(p.index),
-            PointerDest::Scratch => {
-                self.ensure_scratch(p.index + 1);
-                self.scratch.get_mut(p.index)
-            }
-            PointerDest::Temp => {
-                self.ensure_tmp(p.index + 1);
-                self.tmp.get_mut(p.index)
-            }
+            PointerDest::Scratch => self.scratch.get_mut(p.index),
+            PointerDest::Temp => self.tmp.get_mut(p.index),
         }
         .message(|_| format!("Setting byte at {}", p))?;
         *dest = v;
@@ -276,14 +245,8 @@ impl Core<'_> {
             PointerDest::Null => None,
             PointerDest::Input => None,
             PointerDest::Output => self.output.get_mut(p.index..p.index + v.len()),
-            PointerDest::Scratch => {
-                self.ensure_scratch(p.index + v.len());
-                self.scratch.get_mut(p.index..p.index + v.len())
-            }
-            PointerDest::Temp => {
-                self.ensure_tmp(p.index + v.len());
-                self.tmp.get_mut(p.index..p.index + v.len())
-            }
+            PointerDest::Scratch => self.scratch.get_mut(p.index..p.index + v.len()),
+            PointerDest::Temp => self.tmp.get_mut(p.index..p.index + v.len()),
         }
         .message(|_| format!("Writing {} bytes to {}", v.len(), p))?
         .copy_from_slice(v);
@@ -305,8 +268,8 @@ impl Core<'_> {
                 PointerDest::Null => self.raise(format!("{}", dest))?,
                 PointerDest::Input => self.raise(format!("{}", dest))?,
                 PointerDest::Output => self.output,
-                PointerDest::Scratch => &mut self.scratch,
-                PointerDest::Temp => &mut self.tmp,
+                PointerDest::Scratch => self.scratch,
+                PointerDest::Temp => self.tmp,
             };
             if src.index.max(dest.index) + bytes > buf.len() {
                 Err(ErrorBuilder {
@@ -360,15 +323,10 @@ impl Core<'_> {
                         self.output
                             .copy_within(src.index..src.index + n, dest.index)
                     }
-                    PointerDest::Scratch => {
-                        self.ensure_scratch(req_len);
-                        self.scratch
-                            .copy_within(src.index..src.index + n, dest.index)
-                    }
-                    PointerDest::Temp => {
-                        self.ensure_tmp(req_len);
-                        self.tmp.copy_within(src.index..src.index + n, dest.index)
-                    }
+                    PointerDest::Scratch => self
+                        .scratch
+                        .copy_within(src.index..src.index + n, dest.index),
+                    PointerDest::Temp => self.tmp.copy_within(src.index..src.index + n, dest.index),
                 }
             }
         } else {
@@ -389,32 +347,26 @@ impl Core<'_> {
                         }
                         .msg_of(&(src, n))?,
                     ),
-                PointerDest::Scratch => {
-                    self.ensure_scratch(dest.index + n);
-                    self.scratch[dest.index..dest.index + n].copy_from_slice(
-                        match src.dest() {
-                            PointerDest::Null => None,
-                            PointerDest::Input => self.input.get(src.index..src.index + n),
-                            PointerDest::Output => self.output.get(src.index..src.index + n),
-                            PointerDest::Scratch => None,
-                            PointerDest::Temp => self.tmp.get(src.index..src.index + n),
-                        }
-                        .msg_of(&(src, n))?,
-                    )
-                }
-                PointerDest::Temp => {
-                    self.ensure_tmp(dest.index + n);
-                    self.tmp[dest.index..dest.index + n].copy_from_slice(
-                        match src.dest() {
-                            PointerDest::Null => None,
-                            PointerDest::Input => self.input.get(src.index..src.index + n),
-                            PointerDest::Output => self.output.get(src.index..src.index + n),
-                            PointerDest::Scratch => self.scratch.get(src.index..src.index + n),
-                            PointerDest::Temp => None,
-                        }
-                        .msg_of(&(src, n))?,
-                    )
-                }
+                PointerDest::Scratch => self.scratch[dest.index..dest.index + n].copy_from_slice(
+                    match src.dest() {
+                        PointerDest::Null => None,
+                        PointerDest::Input => self.input.get(src.index..src.index + n),
+                        PointerDest::Output => self.output.get(src.index..src.index + n),
+                        PointerDest::Scratch => None,
+                        PointerDest::Temp => self.tmp.get(src.index..src.index + n),
+                    }
+                    .msg_of(&(src, n))?,
+                ),
+                PointerDest::Temp => self.tmp[dest.index..dest.index + n].copy_from_slice(
+                    match src.dest() {
+                        PointerDest::Null => None,
+                        PointerDest::Input => self.input.get(src.index..src.index + n),
+                        PointerDest::Output => self.output.get(src.index..src.index + n),
+                        PointerDest::Scratch => self.scratch.get(src.index..src.index + n),
+                        PointerDest::Temp => None,
+                    }
+                    .msg_of(&(src, n))?,
+                ),
             }
         }
         Ok(())
@@ -426,14 +378,8 @@ impl Core<'_> {
             PointerDest::Null => Err(ErrorBuilder::default())?,
             PointerDest::Input => Err(ErrorBuilder::default())?,
             PointerDest::Output => self.output.get_mut(p.index..p.index + n).msg_of(&(p, n))?,
-            PointerDest::Scratch => {
-                self.ensure_scratch(p.index + n);
-                &mut self.scratch[p.index..p.index + n]
-            }
-            PointerDest::Temp => {
-                self.ensure_tmp(p.index + n);
-                &mut self.tmp[p.index..p.index + n]
-            }
+            PointerDest::Scratch => &mut self.scratch[p.index..p.index + n],
+            PointerDest::Temp => &mut self.tmp[p.index..p.index + n],
         }
         .fill(v);
         Ok(())
