@@ -31,7 +31,7 @@ impl Algorithm for Leviathan {
         dst: Pointer<{ PointerDest::OUTPUT }>,
         dst_size: usize,
     ) -> Res<()> {
-        let offset = (dst - dst_start)?;
+        let offset = dst - dst_start;
         let mut lz = LeviathanLzTable::default();
         lz.read_lz_table(core, mode, src, src + src_used, dst, dst_size, offset)?;
         lz.process_lz_runs(core, mode, dst, dst_size, offset)
@@ -59,7 +59,7 @@ impl LeviathanLzTable {
         let mut decode_count = 0;
 
         self.assert_le(chunk_type, 5)?;
-        self.assert_le(13, (src_end - src)?)?;
+        self.assert_le(13, src_end - src)?;
 
         if offset == 0 {
             core.copy_bytes(dst, src, 8).at(self)?;
@@ -267,7 +267,7 @@ impl LeviathanLzTable {
     ) -> Res<()> {
         let dst_cur = if offset == 0 { dst + 8 } else { dst };
         let dst_end = dst + dst_size;
-        let dst_start = (dst - offset)?;
+        let dst_start = dst - offset;
         match mode {
             0 => self.process_lz::<LeviathanModeSub>(core, dst_cur, dst, dst_end, dst_start),
             1 => self.process_lz::<LeviathanModeRaw>(core, dst_cur, dst, dst_end, dst_start),
@@ -290,8 +290,8 @@ impl LeviathanLzTable {
         let mut len_stream_end = self.len_stream.len();
         let mut offs_stream = self.offs_stream.iter().copied().peekable();
         let mut copyfrom;
-        let match_zone_end = if (dst_end - dst_start)? >= 16 {
-            (dst_end - 16)?
+        let match_zone_end = if (dst_end - dst_start) >= 16 {
+            dst_end - 16
         } else {
             dst_start
         };
@@ -366,7 +366,7 @@ impl LeviathanLzTable {
                 //self.assert_lt(len_stream, len_stream_end)?;
                 len_stream_end = len_stream_end - 1;
                 matchlen = (self.len_stream[len_stream_end] + 6) as usize;
-                self.assert_le(matchlen, (dst_end - dst)? - 8)?;
+                self.assert_le(matchlen, (dst_end - dst) - 8)?;
                 core.repeat_copy_64(dst, copyfrom, matchlen).at(self)?;
                 dst += matchlen;
             } else {
@@ -388,7 +388,7 @@ impl LeviathanLzTable {
 
         // copy final literals
         if dst < dst_end {
-            mode.copy_final_literals(core, (dst_end - dst)?, &mut dst, offset)
+            mode.copy_final_literals(core, dst_end - dst, &mut dst, offset)
                 .at(self)?;
         } else {
             self.assert_eq(dst, dst_end)?;
@@ -554,7 +554,7 @@ impl LeviathanMode for LeviathanModeLamSub {
         }
 
         self.assert_ne(litlen, 0)?;
-        self.assert_lt(litlen, (match_zone_end - *dst)?)?;
+        self.assert_lt(litlen, match_zone_end - *dst)?;
         litlen -= 1;
 
         let lam_byte = core
@@ -643,7 +643,7 @@ impl<const NUM: usize> LeviathanMode for LeviathanModeSubAnd<NUM> {
         let lit_cmd = cmd & 0x18;
         if lit_cmd == 0x18 {
             let litlen = len_stream.next().err()? as usize & 0xffffff;
-            self.assert_le(litlen, (match_zone_end - *dst)?)?;
+            self.assert_le(litlen, match_zone_end - *dst)?;
             for _ in 0..litlen {
                 self.copy_literal(core, dst, last_offset).at(self)?;
             }
@@ -710,13 +710,13 @@ impl LeviathanMode for LeviathanModeO1 {
         if lit_cmd == 0x18 {
             let litlen = len_stream.next().err()?;
             self.assert_lt(0, litlen)?;
-            self.context = core.get_byte((*dst - 1)?).at(self)?;
+            self.context = core.get_byte(*dst - 1).at(self)?;
             for _ in 0..litlen {
                 self.copy_literal(core, dst).at(self)?;
             }
         } else if lit_cmd != 0 {
             // either 1 or 2
-            self.context = core.get_byte((*dst - 1)?).at(self)?;
+            self.context = core.get_byte(*dst - 1).at(self)?;
             self.copy_literal(core, dst).at(self)?;
             if lit_cmd == 0x10 {
                 self.copy_literal(core, dst).at(self)?;
@@ -732,7 +732,7 @@ impl LeviathanMode for LeviathanModeO1 {
         dst: &mut Pointer<{ PointerDest::OUTPUT }>,
         _: i32,
     ) -> Res<()> {
-        self.context = core.get_byte((*dst - 1)?).at(self)?;
+        self.context = core.get_byte(*dst - 1).at(self)?;
         for _ in 0..final_len {
             self.copy_literal(core, dst).at(self)?;
         }

@@ -116,10 +116,7 @@ impl<const DEST: u8> std::ops::Add<i32> for Pointer<DEST> {
 
     fn add(self, rhs: i32) -> Self::Output {
         Pointer {
-            index: self
-                .index
-                .checked_add_signed(rhs.try_into().unwrap())
-                .unwrap(),
+            index: self.index.wrapping_add_signed(rhs as _),
             ..self
         }
     }
@@ -139,39 +136,37 @@ impl<const DEST: u8> std::ops::SubAssign<usize> for Pointer<DEST> {
 
 impl<const DEST: u8> std::ops::AddAssign<i32> for Pointer<DEST> {
     fn add_assign(&mut self, rhs: i32) {
-        self.index = self.index.checked_add_signed(rhs as _).unwrap()
+        self.index = self.index.wrapping_add_signed(rhs as _)
     }
 }
 
 impl<const DEST: u8> std::ops::SubAssign<i32> for Pointer<DEST> {
     fn sub_assign(&mut self, rhs: i32) {
-        self.index = self.index.checked_add_signed(-rhs as _).unwrap()
+        self.index = self.index.wrapping_add_signed(-rhs as _)
     }
 }
 
 impl<const DEST: u8> std::ops::Sub<Pointer<DEST>> for Pointer<DEST> {
-    type Output = Result<usize, ErrorBuilder>;
+    type Output = usize;
 
     fn sub(self, rhs: Pointer<DEST>) -> Self::Output {
-        self.index
-            .checked_sub(rhs.index)
-            .msg_of(&(self.index, rhs.index))
+        self.index.wrapping_sub(rhs.index)
     }
 }
 
 impl<const DEST: u8> std::ops::Sub<usize> for Pointer<DEST> {
-    type Output = Result<Pointer<DEST>, ErrorBuilder>;
+    type Output = Self;
 
     fn sub(self, rhs: usize) -> Self::Output {
-        self.index
-            .checked_sub(rhs)
-            .map(|index| Pointer { index, ..self })
-            .msg_of(&(self.index, rhs))
+        Pointer {
+            index: self.index.wrapping_sub(rhs),
+            ..self
+        }
     }
 }
 
 impl<const DEST: u8> std::ops::Sub<u32> for Pointer<DEST> {
-    type Output = Result<Pointer<DEST>, ErrorBuilder>;
+    type Output = Self;
 
     fn sub(self, rhs: u32) -> Self::Output {
         self.sub(rhs as usize)
@@ -179,15 +174,13 @@ impl<const DEST: u8> std::ops::Sub<u32> for Pointer<DEST> {
 }
 
 impl<const DEST: u8> std::ops::Sub<i32> for Pointer<DEST> {
-    type Output = Result<Pointer<DEST>, ErrorBuilder>;
+    type Output = Self;
 
     fn sub(self, rhs: i32) -> Self::Output {
-        isize::try_from(rhs)
-            .at(&self)?
-            .checked_neg()
-            .and_then(|v| self.index.checked_add_signed(v))
-            .map(|index| Pointer { index, ..self })
-            .msg_of(&(self.index, rhs))
+        Self {
+            index: self.index.wrapping_add_signed(-rhs as _),
+            ..self
+        }
     }
 }
 

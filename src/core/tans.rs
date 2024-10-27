@@ -80,7 +80,7 @@ impl<const SRC: u8, const DST: u8> TansDecoder<SRC, DST> {
     }
 
     fn tans_backward_bits(&mut self, core: &mut Core) -> Res<()> {
-        self.bits_b |= core.get_be_bytes((self.ptr_b - 4)?, 4).at(core)? << self.bitpos_b;
+        self.bits_b |= core.get_be_bytes(self.ptr_b - 4, 4).at(core)? << self.bitpos_b;
         self.ptr_b -= (31 - self.bitpos_b) >> 3;
         self.bitpos_b |= 24;
         Ok(())
@@ -237,7 +237,7 @@ impl<const SRC: u8, const DST: u8> TansDecoder<SRC, DST> {
 
             // another bit reader...
             let mut br2 = BitReader2 {
-                p: (bits.p - ((24 - bits.bitpos + 7) >> 3) as u32)?,
+                p: bits.p - ((24 - bits.bitpos + 7) >> 3) as u32,
                 p_end: bits.p_end,
                 bitpos: ((bits.bitpos - 24) & 7) as u32,
             };

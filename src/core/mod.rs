@@ -51,8 +51,8 @@ impl Core<'_> {
         let mut src_used;
 
         while self.dst_end > self.dst {
-            let dst_count = std::cmp::min((self.dst_end - self.dst)?, 0x20000);
-            self.assert_le(4, (src_end - self.src)?)?;
+            let dst_count = std::cmp::min(self.dst_end - self.dst, 0x20000);
+            self.assert_le(4, src_end - self.src)?;
             let chunkhdr = self.get_be_bytes(self.src, 3).at(self)?;
             log::debug!("index: {}, chunk header: {}", self.src.index, chunkhdr);
             if (chunkhdr & 0x800000) == 0 {
@@ -74,7 +74,7 @@ impl Core<'_> {
                 self.src += 3;
                 src_used = chunkhdr & 0x7FFFF;
                 let mode = (chunkhdr >> 19) & 0xF;
-                self.assert_le(src_used, (src_end - self.src)?)?;
+                self.assert_le(src_used, src_end - self.src)?;
                 if src_used < dst_count {
                     log::debug!("processing with {:?}", algorithm);
                     algorithm
@@ -249,7 +249,7 @@ impl Core<'_> {
         let src_size;
         let dst_size;
 
-        self.assert_le(2, (src_end - src)?)?;
+        self.assert_le(2, src_end - src)?;
 
         let chunk_type = (self.get_byte(src + 0)? as usize >> 4) & 0x7;
         if chunk_type == 0 {
@@ -260,27 +260,27 @@ impl Core<'_> {
                     & 0xFFF;
                 src += 2;
             } else {
-                self.assert_le(3, (src_end - src)?)?;
+                self.assert_le(3, src_end - src)?;
                 src_size = self.get_be_bytes(src, 3).at(self)?;
                 // reserved bits must not be set
                 self.assert_eq(src_size & !0x3ffff, 0)?;
                 src += 3;
             }
             self.assert_le(src_size, output_size)?;
-            self.assert_le(src_size, (src_end - src)?)?;
+            self.assert_le(src_size, src_end - src)?;
             *decoded_size = src_size;
             if force_memmove || SRC != DST {
                 self.copy_bytes(*output, src, src_size).at(self)?;
             } else {
                 output.index = src.index;
             }
-            return Ok((src + src_size - src_org)?);
+            return Ok(src + src_size - src_org);
         }
 
         // In all the other modes, the initial bytes encode
         // the src_size and the dst_size
         if self.get_byte(src)? >= 0x80 {
-            self.assert_le(3, (src_end - src)?)?;
+            self.assert_le(3, src_end - src)?;
 
             // short mode, 10 bit sizes
             let bits = self.get_be_bytes(src, 3).at(self)?;
@@ -289,14 +289,14 @@ impl Core<'_> {
             src += 3;
         } else {
             // long mode, 18 bit sizes
-            self.assert_le(5, (src_end - src)?)?;
+            self.assert_le(5, src_end - src)?;
             let bits = self.get_be_bytes(src + 1, 4).at(self)?;
             src_size = bits & 0x3ffff;
             dst_size = (((bits >> 18) | ((self.get_byte(src + 0)? as usize) << 14)) & 0x3FFFF) + 1;
             self.assert_lt(src_size, dst_size)?;
             src += 5;
         }
-        self.assert_le(src_size, (src_end - src)?)?;
+        self.assert_le(src_size, src_end - src)?;
         self.assert_le(dst_size, output_size)?;
 
         let dst = *output;
@@ -315,7 +315,7 @@ impl Core<'_> {
         self.assert_eq(src_used, src_size)
             .message(|msg| format!("{} for chunk type {}", msg.unwrap_or(""), chunk_type))?;
         *decoded_size = dst_size;
-        Ok((src + src_size - src_org)?)
+        Ok(src + src_size - src_org)
     }
 
     fn decode_bytes_type12<const SRC: u8, const DST: u8>(
@@ -356,18 +356,18 @@ impl Core<'_> {
             self.raise("Bad data".into())?;
             unreachable!()
         }
-        src = (bits.p - ((24 - bits.bitpos) / 8))?;
+        src = bits.p - ((24 - bits.bitpos) / 8);
 
         if num_syms == 1 {
             // no test coverage
             self.memset(output, syms[0], output_size).at(self)?;
-            return Ok((src - src_end)?);
+            return Ok(src - src_end);
         }
 
         let rev_lut = self.make_lut(&code_prefix, &syms).at(self)?;
 
         if chunk_type == 1 {
-            self.assert_le(3, (src_end - src)?)?;
+            self.assert_le(3, src_end - src)?;
             split_mid = self.get_le_bytes(src, 2).at(self)?;
             src += 2;
             let mut hr = HuffReader {
@@ -381,19 +381,19 @@ impl Core<'_> {
             };
             hr.decode_bytes(self, &rev_lut).at(self)?;
         } else {
-            self.assert_le(6, (src_end - src)?)?;
+            self.assert_le(6, src_end - src)?;
 
             half_output_size = (output_size + 1) >> 1;
             split_mid = self.get_le_bytes(src, 3).at(self)?;
             src += 3;
-            self.assert_le(split_mid, (src_end - src)?)?;
+            self.assert_le(split_mid, src_end - src)?;
             src_mid = src + split_mid;
             split_left = self.get_le_bytes(src, 2).at(self)?;
             src += 2;
-            self.assert_le(split_left + 2, (src_end - src)?)?;
-            self.assert_le(3, (src_end - src_mid)?)?;
+            self.assert_le(split_left + 2, src_end - src)?;
+            self.assert_le(3, src_end - src_mid)?;
             split_right = self.get_le_bytes(src_mid, 2).at(self)?;
-            self.assert_le(split_right + 2, (src_end - (src_mid + 2))?)?;
+            self.assert_le(split_right + 2, src_end - (src_mid + 2))?;
 
             let mut hr = HuffReader {
                 output,
@@ -515,7 +515,7 @@ impl Core<'_> {
         let mut br2 = BitReader2 {
             bitpos: ((bits.bitpos - 24) & 7) as u32,
             p_end: bits.p_end,
-            p: (bits.p - ((24 - bits.bitpos + 7) >> 3) as u32)?,
+            p: bits.p - ((24 - bits.bitpos + 7) >> 3) as u32,
         };
 
         self.decode_golomb_rice_lengths(&mut code_len[..num_symbols as usize + fluff], &mut br2)
@@ -680,7 +680,7 @@ impl Core<'_> {
 
         let bits_required = bitpos as usize + bitcount * dst.len();
         let bytes_required = (bits_required + 7) >> 3;
-        self.assert_lt(bytes_required, (br.p_end - p)?)?;
+        self.assert_lt(bytes_required, br.p_end - p)?;
 
         br.p = p + (bits_required >> 3);
         br.bitpos = (bits_required & 7) as u32;
@@ -807,7 +807,7 @@ impl Core<'_> {
             src += 1;
             for _ in 0..n {
                 let mut decoded_size = 0;
-                let output_size = (output_end - output)?;
+                let output_size = output_end - output;
                 let dec = self
                     .decode_bytes(
                         &mut output,
@@ -823,7 +823,7 @@ impl Core<'_> {
                 src += dec;
             }
             self.assert_eq(output, output_end)?;
-            Ok((src - src_org)?)
+            Ok(src - src_org)
         } else {
             let mut decoded_size = 0;
             let dec = self
@@ -861,7 +861,7 @@ impl Core<'_> {
     ) -> Res<usize> {
         let mut src = src_org;
 
-        self.assert_le(4, (src_end - src)?)?;
+        self.assert_le(4, src_end - src)?;
 
         let mut decoded_size = 0;
         let mut num_arrays_in_file = self.get_byte(src)? as usize;
@@ -880,7 +880,7 @@ impl Core<'_> {
                         src,
                         src_end,
                         &mut decoded_size,
-                        (dst_end - dst)?,
+                        dst_end - dst,
                         force_memmove,
                         scratch,
                     )
@@ -892,7 +892,7 @@ impl Core<'_> {
                 total_size += decoded_size;
             }
             *total_size_out = total_size;
-            return Ok((src - src_org)?);
+            return Ok(src - src_org);
         }
 
         let mut entropy_array_data = [Default::default(); 63];
@@ -922,7 +922,7 @@ impl Core<'_> {
         }
         *total_size_out = total_size;
 
-        self.assert_le(3, (src_end - src)?)?;
+        self.assert_le(3, src_end - src)?;
 
         let q = self.get_le_bytes(src, 2).at(self)?;
         src += 2;
@@ -1001,7 +1001,7 @@ impl Core<'_> {
         let mut decoded_intervals = Vec::with_capacity(num_lens);
 
         let varbits_complen = q & 0x3FFF;
-        self.assert_le(varbits_complen, (src_end - src)?)?;
+        self.assert_le(varbits_complen, src_end - src)?;
 
         let mut f = src;
         let mut bits_f = 0u32;
@@ -1027,7 +1027,7 @@ impl Core<'_> {
                 >> (24 - bitpos_f);
             f += (bitpos_f + 7) >> 3;
 
-            bits_b |= self.get_le_bytes((b - 4)?, 4).at(self)? as u32 >> (24 - bitpos_b);
+            bits_b |= self.get_le_bytes(b - 4, 4).at(self)? as u32 >> (24 - bitpos_b);
             b -= (bitpos_b + 7) >> 3;
 
             let numbits_f = self.get_byte(interval_lenlog2 + i * 2 + 0)? as i32;
@@ -1055,13 +1055,13 @@ impl Core<'_> {
                 .get_be_bytes(f, 4.min(self.input.len() - f.index))
                 .at(self)? as u32
                 >> (24 - bitpos_f);
-            let numbits_f = self.get_byte((interval_lenlog2 + num_lens - 1)?)?;
+            let numbits_f = self.get_byte(interval_lenlog2 + num_lens - 1)?;
             bits_f = (bits_f | 1).rotate_left(numbits_f as _);
             let value_f = bits_f & BITMASKS[numbits_f as usize];
             decoded_intervals.push(value_f);
         }
 
-        self.assert_eq(self.get_byte((interval_indexes + num_indexes - 1)?)?, 0)?;
+        self.assert_eq(self.get_byte(interval_indexes + num_indexes - 1)?, 0)?;
 
         let mut indi = 0;
         let mut leni = 0;
@@ -1084,7 +1084,7 @@ impl Core<'_> {
                 leni += 1;
                 let bytes_left = entropy_array_size[source - 1];
                 self.assert_le(cur_len, bytes_left)?;
-                self.assert_le(cur_len, (dst_end - dst)?)?;
+                self.assert_le(cur_len, dst_end - dst)?;
                 let blksrc = entropy_array_data[source - 1];
                 entropy_array_size[source - 1] -= cur_len;
                 entropy_array_data[source - 1] += cur_len;
@@ -1094,7 +1094,7 @@ impl Core<'_> {
             if increment_leni {
                 leni += 1;
             }
-            array_lens.push((dst - array_data[arri])?);
+            array_lens.push(dst - array_data[arri]);
         }
 
         self.assert_eq(indi, num_indexes)?;
@@ -1104,7 +1104,7 @@ impl Core<'_> {
             self.assert_eq(i, 0)?
         }
 
-        Ok((src_end_actual - src_org)?)
+        Ok(src_end_actual - src_org)
     }
 
     fn get_block_size<const SRC: u8>(
@@ -1129,7 +1129,7 @@ impl Core<'_> {
                 src += 3;
             }
             self.assert_le(src_size, dest_capacity)?;
-            self.assert_le(src_size, (src_end - src)?)?;
+            self.assert_le(src_size, src_end - src)?;
             return Ok(src_size);
         }
 
@@ -1152,7 +1152,7 @@ impl Core<'_> {
             self.assert_lt(src_size, dst_size)?;
             src += 5;
         }
-        self.assert_le(src_size, (src_end - src)?)?;
+        self.assert_le(src_size, src_end - src)?;
         self.assert_le(dst_size, dest_capacity)?;
         Ok(dst_size)
     }
@@ -1212,13 +1212,13 @@ impl Core<'_> {
         let mut rle_byte = 0;
 
         while cmd_ptr < cmd_ptr_end {
-            let cmd = self.get_byte((cmd_ptr_end - 1)?)? as usize;
+            let cmd = self.get_byte(cmd_ptr_end - 1)? as usize;
             if cmd == 0 || cmd > 0x2f {
                 cmd_ptr_end -= 1;
                 let bytes_to_copy = !cmd & 0xF;
                 let bytes_to_rle = cmd >> 4;
-                self.assert_le(bytes_to_copy + bytes_to_rle, (dst_end - dst)?)?;
-                self.assert_le(bytes_to_copy, (cmd_ptr_end - cmd_ptr)?)?;
+                self.assert_le(bytes_to_copy + bytes_to_rle, dst_end - dst)?;
+                self.assert_le(bytes_to_copy, cmd_ptr_end - cmd_ptr)?;
                 self.copy_bytes(dst, cmd_ptr, bytes_to_copy).at(self)?;
                 cmd_ptr += bytes_to_copy;
                 dst += bytes_to_copy;
@@ -1229,8 +1229,8 @@ impl Core<'_> {
                 let data = self.get_le_bytes(cmd_ptr_end, 2).at(self)? - 4096;
                 let bytes_to_copy = data & 0x3F;
                 let bytes_to_rle = data >> 6;
-                self.assert_le(bytes_to_copy + bytes_to_rle, (dst_end - dst)?)?;
-                self.assert_le(bytes_to_copy, (cmd_ptr_end - cmd_ptr)?)?;
+                self.assert_le(bytes_to_copy + bytes_to_rle, dst_end - dst)?;
+                self.assert_le(bytes_to_copy, cmd_ptr_end - cmd_ptr)?;
                 self.copy_bytes(dst, cmd_ptr, bytes_to_copy).at(self)?;
                 cmd_ptr += bytes_to_copy;
                 dst += bytes_to_copy;
@@ -1243,14 +1243,14 @@ impl Core<'_> {
             } else if cmd >= 9 {
                 cmd_ptr_end -= 2;
                 let bytes_to_rle = (self.get_le_bytes(cmd_ptr_end, 2).at(self)? - 0x8ff) * 128;
-                self.assert_le(bytes_to_rle, (dst_end - dst)?)?;
+                self.assert_le(bytes_to_rle, dst_end - dst)?;
                 self.memset(dst, rle_byte, bytes_to_rle).at(self)?;
                 dst += bytes_to_rle;
             } else {
                 cmd_ptr_end -= 2;
                 let bytes_to_copy = (self.get_le_bytes(cmd_ptr_end, 2).at(self)? - 511) * 64;
-                self.assert_le(bytes_to_copy, (cmd_ptr_end - cmd_ptr)?)?;
-                self.assert_le(bytes_to_copy, (dst_end - dst)?)?;
+                self.assert_le(bytes_to_copy, cmd_ptr_end - cmd_ptr)?;
+                self.assert_le(bytes_to_copy, dst_end - dst)?;
                 self.copy_bytes(dst, cmd_ptr, bytes_to_copy).at(self)?;
                 dst += bytes_to_copy;
                 cmd_ptr += bytes_to_copy;
@@ -1290,12 +1290,12 @@ impl Core<'_> {
         let mut decoder = TansDecoder::default();
         let tans_data = decoder.decode_table(self, &mut br, l_bits).at(self)?;
 
-        src = (br.p - (24 - br.bitpos) / 8)?;
+        src = br.p - (24 - br.bitpos) / 8;
 
         self.assert_lt(src, src_end)?;
 
         decoder.dst = dst;
-        decoder.dst_end = (dst + dst_size - 5)?;
+        decoder.dst_end = dst + dst_size - 5;
 
         decoder.lut = decoder.init_lut(&tans_data, l_bits);
 
@@ -1335,7 +1335,7 @@ impl Core<'_> {
         bitpos_f -= l_bits;
 
         decoder.bits_f = bits_f;
-        decoder.ptr_f = (src - (bitpos_f >> 3))?;
+        decoder.ptr_f = src - (bitpos_f >> 3);
         decoder.bitpos_f = (bitpos_f & 7) as _;
 
         decoder.bits_b = bits_b;

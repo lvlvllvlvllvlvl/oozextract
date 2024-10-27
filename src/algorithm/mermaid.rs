@@ -18,7 +18,7 @@ impl Algorithm for Mermaid {
         dst: Pointer<{ PointerDest::OUTPUT }>,
         dst_size: usize,
     ) -> Res<()> {
-        let offset = (dst - dst_start)?;
+        let offset = dst - dst_start;
         let mut lz = MermaidLzTable::default();
         lz.read_lz_table(core, mode, src, src + src_used, dst, dst_size, offset)?;
         lz.process_lz_runs(core, mode, src + src_used, dst, dst_size, offset)
@@ -205,11 +205,11 @@ impl MermaidLzTable {
                 length = cmd + 5;
 
                 assert_ne!(off32_stream, off32_stream_end);
-                offs_ptr = (dst_begin - self.off32()[off32_stream])?;
+                offs_ptr = dst_begin - self.off32()[off32_stream];
                 off32_stream += 1;
                 recent_offs = offs_ptr.index as i32 - dst.index as i32;
 
-                assert!((dst_end - dst)? >= length);
+                assert!((dst_end - dst) >= length);
                 core.repeat_copy_64(dst, offs_ptr, length).at(self)?;
                 dst += length;
                 //simde_mm_prefetch((char*)dst_begin - off32_stream[3], SIMDE_MM_HINT_T0);
@@ -217,15 +217,15 @@ impl MermaidLzTable {
                 self.assert_lt(length_stream, src_end)?;
                 length = core.get_byte(length_stream).at(self)? as usize;
                 if length > 251 {
-                    assert!((src_end - length_stream)? >= 3);
+                    assert!((src_end - length_stream) >= 3);
                     length += core.get_le_bytes(length_stream + 1, 2).at(core)? * 4;
                     length_stream += 2;
                 }
                 length_stream += 1;
 
                 length += 64;
-                assert!((dst_end - dst)? >= length);
-                assert!((lit_stream_end - lit_stream)? >= length);
+                assert!((dst_end - dst) >= length);
+                assert!((lit_stream_end - lit_stream) >= length);
                 if ADD_MODE {
                     core.copy_64_add(dst, lit_stream, dst + recent_offs, length)
                         .at(self)?;
@@ -238,18 +238,18 @@ impl MermaidLzTable {
                 self.assert_lt(length_stream, src_end)?;
                 length = core.get_byte(length_stream).at(self)? as usize;
                 if length > 251 {
-                    assert!((src_end - length_stream)? >= 3);
+                    assert!((src_end - length_stream) >= 3);
                     length += core.get_le_bytes(length_stream + 1, 2).at(core)? * 4;
                     length_stream += 2;
                 }
                 length_stream += 1;
                 length += 91;
 
-                offs_ptr = (dst
+                offs_ptr = dst
                     - self
                         .off16_stream
                         .pop_front()
-                        .msg_of(&"offset_stream_empty")? as usize)?;
+                        .msg_of(&"offset_stream_empty")? as usize;
                 recent_offs = offs_ptr.index as i32 - dst.index as i32;
                 core.repeat_copy_64(dst, offs_ptr, length).at(self)?;
                 dst += length;
@@ -258,14 +258,14 @@ impl MermaidLzTable {
                 self.assert_lt(length_stream, src_end)?;
                 length = core.get_byte(length_stream).at(self)? as usize;
                 if length > 251 {
-                    assert!((src_end - length_stream)? >= 3);
+                    assert!((src_end - length_stream) >= 3);
                     length += core.get_le_bytes(length_stream + 1, 2).at(core)? * 4;
                     length_stream += 2;
                 }
                 length_stream += 1;
                 length += 29;
                 assert_ne!(off32_stream, off32_stream_end);
-                offs_ptr = (dst_begin - self.off32()[off32_stream])?;
+                offs_ptr = dst_begin - self.off32()[off32_stream];
                 off32_stream += 1;
                 recent_offs = offs_ptr.index as i32 - dst.index as i32;
                 core.repeat_copy_64(dst, offs_ptr, length).at(self)?;
@@ -274,7 +274,7 @@ impl MermaidLzTable {
             }
         }
 
-        length = (dst_end - dst)?;
+        length = dst_end - dst;
         if ADD_MODE {
             core.copy_64_add(dst, lit_stream, dst + recent_offs, length)
                 .at(self)?;
@@ -308,7 +308,7 @@ impl MermaidLzTable {
         let mut scratch = pointer::tmp(0);
 
         assert!(mode <= 1, "{}", mode);
-        assert!((src_end - src)? >= 10);
+        assert!((src_end - src) >= 10);
 
         if offset == 0 {
             core.copy_bytes(dst, src, 8).at(self)?;
@@ -354,13 +354,13 @@ impl MermaidLzTable {
         if dst_size <= 0x10000 {
             self.cmd_stream_2_offs = decode_count;
         } else {
-            assert!((src_end - src)? >= 2);
+            assert!((src_end - src) >= 2);
             self.cmd_stream_2_offs = core.get_le_bytes(src, 2).at(core)?;
             src += 2;
             assert!(self.cmd_stream_2_offs <= self.cmd_stream_2_offs_end);
         }
 
-        assert!((src_end - src)? >= 2);
+        assert!((src_end - src) >= 2);
 
         let off16_count = core.get_le_bytes(src, 2).at(core)?;
         src += 2;
@@ -415,7 +415,7 @@ impl MermaidLzTable {
             src += off16_count * 2;
         }
 
-        assert!((src_end - src)? >= 3);
+        assert!((src_end - src) >= 3);
         let tmp = core.get_le_bytes(src, 3).at(core)?;
         src += 3;
 
@@ -423,12 +423,12 @@ impl MermaidLzTable {
             off32_size_1 = tmp >> 12;
             off32_size_2 = tmp & 0xFFF;
             if off32_size_1 == 4095 {
-                assert!((src_end - src)? >= 2);
+                assert!((src_end - src) >= 2);
                 off32_size_1 = core.get_le_bytes(src, 2).at(core)?;
                 src += 2;
             }
             if off32_size_2 == 4095 {
-                assert!((src_end - src)? >= 2);
+                assert!((src_end - src) >= 2);
                 off32_size_2 = core.get_le_bytes(src, 2).at(core)?;
                 src += 2;
             }
@@ -473,7 +473,7 @@ impl MermaidLzTable {
 
         if offset < (0xC00000 - 1) {
             for _ in 0..output_size {
-                assert!((src_end - src_cur)? >= 3);
+                assert!((src_end - src_cur) >= 3);
                 let off = core.get_le_bytes(src_cur, 3).at(core)?;
                 src_cur += 3;
                 assert!(off <= offset);
@@ -483,10 +483,10 @@ impl MermaidLzTable {
                     self.off32_stream_2.push(off as u32)
                 }
             }
-            Ok((src_cur - src)?)
+            Ok(src_cur - src)
         } else {
             for _ in 0..output_size {
-                assert!((src_end - src_cur)? >= 3);
+                assert!((src_end - src_cur) >= 3);
                 let mut off = core.get_le_bytes(src_cur, 3).at(core)?;
                 src_cur += 3;
 
@@ -502,7 +502,7 @@ impl MermaidLzTable {
                     self.off32_stream_2.push(off as u32)
                 }
             }
-            Ok((src_cur - src)?)
+            Ok(src_cur - src)
         }
     }
 }

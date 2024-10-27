@@ -46,7 +46,7 @@ impl Algorithm for Kraken {
     ) -> Res<()> {
         let mut lz = KrakenLzTable::default();
         lz.assert_le(mode, 1)?;
-        let offset = (dst - dst_start)?;
+        let offset = dst - dst_start;
         lz.read_lz_table(core, src, src + src_used, dst, dst_size, offset)?;
         if mode == 0 {
             lz.process_lz_runs::<true>(core, dst, dst_size, offset)
@@ -73,7 +73,7 @@ impl KrakenLzTable {
         let mut packed_len_stream;
         let mut scratch = pointer::scratch(0);
 
-        self.assert_le(13, (src_end - src)?)?;
+        self.assert_le(13, src_end - src)?;
 
         if offset == 0 {
             core.copy_bytes(dst, src, 8).at(self)?;
@@ -128,7 +128,7 @@ impl KrakenLzTable {
         scratch += decode_count;
 
         // Check if to decode the multistuff crap
-        self.assert_le(3, (src_end - src)?)?;
+        self.assert_le(3, src_end - src)?;
 
         let mut offs_scaling = 0;
         let mut packed_offs_stream_extra = None;
@@ -140,10 +140,10 @@ impl KrakenLzTable {
             offs_scaling = i32::from(core.get_byte(src).at(self)?) - 127;
             src += 1;
 
-            packed_offs_stream = Some(scratch);
+            packed_offs_stream = scratch;
             n = core
                 .decode_bytes(
-                    packed_offs_stream.as_mut().unwrap(),
+                    &mut packed_offs_stream,
                     src,
                     src_end,
                     &mut offs_stream_size,
@@ -174,10 +174,10 @@ impl KrakenLzTable {
             }
         } else {
             // Decode packed offset stream, it's bounded by the command length.
-            packed_offs_stream = Some(scratch);
+            packed_offs_stream = scratch;
             n = core
                 .decode_bytes(
-                    packed_offs_stream.as_mut().unwrap(),
+                    &mut packed_offs_stream,
                     src,
                     src_end,
                     &mut offs_stream_size,
@@ -210,59 +210,32 @@ impl KrakenLzTable {
         self.offs_stream = vec![0; offs_stream_size];
         self.len_stream = vec![0; len_stream_size];
 
-        match (packed_offs_stream, packed_offs_stream_extra) {
-            (Some(stream), Some(extra)) => core
-                .unpack_offsets(
-                    src,
-                    src_end,
-                    stream,
-                    extra,
-                    offs_scaling,
-                    packed_len_stream,
-                    self.offs_stream.as_mut(),
-                    self.len_stream.as_mut(),
-                    false,
-                )
-                .at(self)?,
-            (Some(stream), None) => core
-                .unpack_offsets(
-                    src,
-                    src_end,
-                    stream,
-                    pointer::null(),
-                    offs_scaling,
-                    packed_len_stream,
-                    self.offs_stream.as_mut(),
-                    self.len_stream.as_mut(),
-                    false,
-                )
-                .at(self)?,
-            (None, Some(extra)) => core
-                .unpack_offsets(
-                    src,
-                    src_end,
-                    pointer::null(),
-                    extra,
-                    offs_scaling,
-                    packed_len_stream,
-                    self.offs_stream.as_mut(),
-                    self.len_stream.as_mut(),
-                    false,
-                )
-                .at(self)?,
-            (None, None) => core
-                .unpack_offsets(
-                    src,
-                    src_end,
-                    pointer::null(),
-                    pointer::null(),
-                    offs_scaling,
-                    packed_len_stream,
-                    self.offs_stream.as_mut(),
-                    self.len_stream.as_mut(),
-                    false,
-                )
-                .at(self)?,
+        if let Some(extra) = packed_offs_stream_extra {
+            core.unpack_offsets(
+                src,
+                src_end,
+                packed_offs_stream,
+                extra,
+                offs_scaling,
+                packed_len_stream,
+                self.offs_stream.as_mut(),
+                self.len_stream.as_mut(),
+                false,
+            )
+            .at(self)?
+        } else {
+            core.unpack_offsets(
+                src,
+                src_end,
+                packed_offs_stream,
+                pointer::null(),
+                offs_scaling,
+                packed_len_stream,
+                self.offs_stream.as_mut(),
+                self.len_stream.as_mut(),
+                false,
+            )
+            .at(self)?
         }
 
         Ok(())
@@ -342,8 +315,8 @@ impl KrakenLzTable {
         self.assert_eq(offs_stream.len(), 0)?;
         self.assert_eq(len_stream.len(), 0)?;
 
-        let final_len = (dst_end - dst)?;
-        self.assert_eq(final_len, (lit_stream_end - lit_stream)?)?;
+        let final_len = dst_end - dst;
+        self.assert_eq(final_len, lit_stream_end - lit_stream)?;
 
         if MODE_0 {
             core.copy_64_add(dst, lit_stream, dst + last_offset, final_len)

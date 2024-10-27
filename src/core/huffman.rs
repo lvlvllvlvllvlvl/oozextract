@@ -51,7 +51,7 @@ impl<const SRC: u8, const DST: u8> HuffReader<SRC, DST> {
 
         assert!(src <= src_mid, "{:?} > {:?}", src, src_mid);
 
-        if (self.src_end - src_mid)? >= 4 && (dst_end - dst)? >= 6 {
+        if (self.src_end - src_mid) >= 4 && (dst_end - dst) >= 6 {
             dst_end -= 5;
             src_end -= 4;
 
@@ -118,8 +118,8 @@ impl<const SRC: u8, const DST: u8> HuffReader<SRC, DST> {
             src_mid_bitpos &= 7;
         }
         while dst < dst_end {
-            if (src_mid - src)? <= 1 {
-                if (src_mid - src)? == 1 {
+            if (src_mid - src) <= 1 {
+                if (src_mid - src) == 1 {
                     // no test coverage
                     src_bits |= (core.get_byte(src).at(self)? as u32) << src_bitpos;
                 }
@@ -136,14 +136,14 @@ impl<const SRC: u8, const DST: u8> HuffReader<SRC, DST> {
             src_bitpos &= 7;
 
             if dst < dst_end {
-                if (src_end - src_mid)? <= 1 {
-                    if (src_end - src_mid)? == 1 {
+                if (src_end - src_mid) <= 1 {
+                    if (src_end - src_mid) == 1 {
                         let mid = core.get_byte(src_mid).at(self)? as u32;
                         src_end_bits |= mid << src_end_bitpos;
                         src_mid_bits |= mid << src_mid_bitpos;
                     }
                 } else {
-                    let v = core.get_le_bytes((src_end - 2)?, 2).at(self)? as u32;
+                    let v = core.get_le_bytes(src_end - 2, 2).at(self)? as u32;
                     src_end_bits |= (((v >> 8) | (v << 8)) & 0xffff) << src_end_bitpos;
                     src_mid_bits |=
                         (core.get_le_bytes(src_mid, 2).at(self)? as u32) << src_mid_bitpos;
