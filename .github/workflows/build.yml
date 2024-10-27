@@ -17,10 +17,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build
+        env:
+          FLAGS: -C target-feature=+simd128
+          RUSTFLAGS: -C target-feature=+simd128
         run: |
           cargo install cargo-all-features wasm-pack
           cargo build-all-features
-          wasm-pack build --target web --features wasm
+          wasm-pack build --profiling --target web --features wasm
           npx -y wasm-pack-inline pkg --dir pkg/inline
       - name: Run tests
         run: cargo test --release --verbose --features tokio
+      - name: Benchmark wasm
+        working-directory: wasm-test
+        run: |
+          npm install
+          npm run bench
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-bench
+          path: wasm-test/test-runner-profile
