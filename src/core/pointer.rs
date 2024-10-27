@@ -1,7 +1,8 @@
-use crate::core::error::{ErrorBuilder, ErrorContext, Res, ResultBuilder, WithContext};
+use crate::core::error::{ErrorBuilder, ErrorContext, Res, ResultBuilder};
 use crate::core::Core;
 use std::fmt::{Display, Formatter};
 use std::mem::size_of;
+use wide::{u64x2, u8x16};
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub enum PointerDest {
@@ -217,6 +218,37 @@ impl Core<'_> {
         bytes[B - n..].copy_from_slice(self.get_slice(p, n)?);
         Ok(usize::from_be_bytes(bytes))
     }
+    pub fn get_64<const DEST: u8>(&mut self, p: Pointer<DEST>) -> Res<u64> {
+        let src = match p.dest() {
+            PointerDest::Null => panic!(),
+            PointerDest::Input => self.input,
+            PointerDest::Output => self.output,
+            PointerDest::Scratch => self.scratch,
+            PointerDest::Temp => self.tmp,
+        };
+        let len = 8.min(src.len() - p.index);
+        let slice = &src[p.index..p.index + len];
+        if len == 8 {
+            Ok(bytemuck::pod_read_unaligned(slice))
+        } else {
+            let bytes = core::array::from_fn(|i| slice.get(i).copied().unwrap_or_default());
+            Ok(u64::from_ne_bytes(bytes))
+        }
+    }
+    pub fn set_64<const DEST: u8>(&mut self, p: Pointer<DEST>, v: u64) -> Res<()> {
+        let src = match p.dest() {
+            PointerDest::Null => panic!(),
+            PointerDest::Input => panic!(),
+            PointerDest::Output => &mut self.output,
+            PointerDest::Scratch => &mut self.scratch,
+            PointerDest::Temp => &mut self.tmp,
+        };
+        let len = 8.min(src.len() - p.index);
+        for i in 0..len {
+            src[p.index + i] = v.to_ne_bytes()[i]
+        }
+        Ok(())
+    }
 
     pub fn set<const DEST: u8>(&mut self, p: Pointer<DEST>, v: u8) -> Res<()> {
         p.debug(1);
@@ -279,7 +311,13 @@ impl Core<'_> {
         src: Pointer<SRC>,
         bytes: usize,
     ) -> Res<()> {
-        if dest.dest() != src.dest() || bytes < src.index.abs_diff(dest.index) {
+        if cfg!(target_arch = "wasm32") {
+            for i in 0..=bytes / 8 {
+                let v = self.get_64(src + i * 8)?;
+                self.set_64(dest + i * 8, v)?
+            }
+            Ok(())
+        } else if dest.dest() != src.dest() || bytes < src.index.abs_diff(dest.index) {
             self.copy_bytes(dest, src, bytes)
         } else {
             dest.debug(bytes);
@@ -313,13 +351,11 @@ impl Core<'_> {
         rhs: Pointer<RHS>,
         n: usize,
     ) -> Res<()> {
-        for i in 0..n {
-            self.set(
-                dest + i,
-                self.get_byte(lhs + i)?
-                    .wrapping_add(self.get_byte(rhs + i)?),
-            )
-            .at(self)?
+        for i in 0..=n / 8 {
+            let l: u8x16 = bytemuck::cast(u64x2::splat(self.get_64(lhs + i * 8)?));
+            let r: u8x16 = bytemuck::cast(u64x2::splat(self.get_64(rhs + i * 8)?));
+            let sum: u64x2 = bytemuck::cast(l + r);
+            self.set_64(dest + i * 8, sum.as_array_ref()[0])?
         }
         Ok(())
     }
