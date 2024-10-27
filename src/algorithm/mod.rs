@@ -5,7 +5,7 @@ mod lzna;
 mod mermaid;
 
 use crate::core::error::Res;
-use crate::core::pointer::Pointer;
+use crate::core::pointer::{Pointer, PointerDest};
 use crate::core::Core;
 use std::fmt::Debug;
 
@@ -20,10 +20,10 @@ pub trait Algorithm: Debug {
         &self,
         core: &mut Core,
         mode: usize,
-        src: Pointer,
+        src: Pointer<{ PointerDest::INPUT }>,
         src_used: usize,
-        dst_start: Pointer,
-        dst: Pointer,
+        dst_start: Pointer<{ PointerDest::OUTPUT }>,
+        dst: Pointer<{ PointerDest::OUTPUT }>,
         dst_size: usize,
     ) -> Res<()>;
 }

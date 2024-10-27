@@ -9,16 +9,16 @@ pub const BASE_PREFIX: [usize; 12] = [
 ];
 
 #[derive(Default)]
-pub struct HuffReader {
+pub struct HuffReader<const SRC: u8, const DST: u8> {
     // Array to hold the output of the huffman read array operation
-    pub output: Pointer,
-    pub output_end: Pointer,
+    pub output: Pointer<DST>,
+    pub output_end: Pointer<DST>,
     // We decode three parallel streams, two forwards, |src| and |src_mid|
     // while |src_end| is decoded backwards.
-    pub src: Pointer,
-    pub src_mid: Pointer,
-    pub src_end: Pointer,
-    pub src_mid_org: Pointer,
+    pub src: Pointer<SRC>,
+    pub src_mid: Pointer<SRC>,
+    pub src_end: Pointer<SRC>,
+    pub src_mid_org: Pointer<SRC>,
     pub src_bitpos: i32,
     pub src_mid_bitpos: i32,
     pub src_end_bitpos: i32,
@@ -27,9 +27,9 @@ pub struct HuffReader {
     pub src_end_bits: u32,
 }
 
-impl ErrorContext for HuffReader {}
+impl<const SRC: u8, const DST: u8> ErrorContext for HuffReader<SRC, DST> {}
 
-impl HuffReader {
+impl<const SRC: u8, const DST: u8> HuffReader<SRC, DST> {
     pub fn decode_bytes(&mut self, core: &mut Core, lut: &HuffRevLut) -> Res<()> {
         let mut src = self.src;
         let mut src_bits = self.src_bits;

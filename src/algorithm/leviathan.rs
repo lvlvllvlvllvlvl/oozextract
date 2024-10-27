@@ -1,18 +1,18 @@
 use crate::algorithm::Algorithm;
 use crate::core::error::{ErrorContext, Res, ResultBuilder, SliceErrors, WithContext};
-use crate::core::pointer::Pointer;
-use crate::core::Core;
+use crate::core::pointer::{Pointer, PointerDest};
+use crate::core::{pointer, Core};
 
 #[derive(Default)]
 pub struct LeviathanLzTable {
     offs_stream: Vec<i32>,
     len_stream: Vec<i32>,
-    lit_stream: Vec<Pointer>,
+    lit_stream: Vec<Pointer<{ PointerDest::TEMP }>>,
     lit_stream_size: Vec<usize>,
     lit_stream_total: usize,
-    multi_cmd_ptr: Vec<Pointer>,
+    multi_cmd_ptr: Vec<Pointer<{ PointerDest::TEMP }>>,
     multi_cmd_end: Vec<usize>,
-    cmd_stream: Pointer,
+    cmd_stream: Option<Pointer<{ PointerDest::TEMP }>>,
     cmd_stream_size: usize,
 }
 impl ErrorContext for LeviathanLzTable {}
@@ -25,10 +25,10 @@ impl Algorithm for Leviathan {
         &self,
         core: &mut Core,
         mode: usize,
-        src: Pointer,
+        src: Pointer<{ PointerDest::INPUT }>,
         src_used: usize,
-        dst_start: Pointer,
-        dst: Pointer,
+        dst_start: Pointer<{ PointerDest::OUTPUT }>,
+        dst: Pointer<{ PointerDest::OUTPUT }>,
         dst_size: usize,
     ) -> Res<()> {
         let offset = (dst - dst_start)?;
@@ -43,14 +43,14 @@ impl LeviathanLzTable {
         &mut self,
         core: &mut Core,
         chunk_type: usize,
-        mut src: Pointer,
-        src_end: Pointer,
-        mut dst: Pointer,
+        mut src: Pointer<{ PointerDest::INPUT }>,
+        src_end: Pointer<{ PointerDest::INPUT }>,
+        mut dst: Pointer<{ PointerDest::OUTPUT }>,
         dst_size: usize,
         offset: usize,
     ) -> Res<()> {
-        let mut tmp = Pointer::tmp(0);
-        let scratch = Pointer::scratch(0);
+        let mut tmp = pointer::tmp(0);
+        let scratch = pointer::scratch(0);
         let mut packed_offs_stream;
         let mut packed_len_stream;
         let mut offs_stream_size = 0;
@@ -68,7 +68,7 @@ impl LeviathanLzTable {
         }
 
         let mut offs_scaling = 0;
-        let mut packed_offs_stream_extra = Pointer::null();
+        let mut packed_offs_stream_extra = None;
         let offs_stream_limit = dst_size / 3;
 
         if core.get_byte(src).at(self)? & 0x80 == 0 {
@@ -107,10 +107,10 @@ impl LeviathanLzTable {
             tmp += offs_stream_size;
 
             if offs_scaling != 1 {
-                packed_offs_stream_extra = tmp;
+                packed_offs_stream_extra = Some(tmp);
                 src += core
                     .decode_bytes(
-                        &mut packed_offs_stream_extra,
+                        packed_offs_stream_extra.as_mut().unwrap(),
                         src,
                         src_end,
                         &mut decode_count,
@@ -171,7 +171,7 @@ impl LeviathanLzTable {
                     src,
                     src_end,
                     tmp,
-                    Pointer::tmp(usize::MAX),
+                    pointer::tmp(usize::MAX),
                     &mut self.lit_stream,
                     &mut self.lit_stream_size,
                     array_count,
@@ -201,7 +201,7 @@ impl LeviathanLzTable {
                     scratch,
                 )
                 .at(self)?;
-            self.cmd_stream = out;
+            self.cmd_stream = Some(out);
             self.cmd_stream_size = decode_count;
             tmp += decode_count;
         } else {
@@ -212,7 +212,7 @@ impl LeviathanLzTable {
                     src,
                     src_end,
                     tmp,
-                    Pointer::tmp(usize::MAX),
+                    pointer::tmp(usize::MAX),
                     &mut self.multi_cmd_ptr,
                     &mut self.multi_cmd_end,
                     8,
@@ -222,23 +222,38 @@ impl LeviathanLzTable {
                 )
                 .at(self)?;
 
-            self.cmd_stream = Pointer::null();
+            self.cmd_stream = None;
             self.cmd_stream_size = decode_count;
             tmp += decode_count;
         }
 
-        core.unpack_offsets(
-            src,
-            src_end,
-            packed_offs_stream,
-            packed_offs_stream_extra,
-            offs_scaling,
-            packed_len_stream,
-            self.offs_stream.as_mut(),
-            self.len_stream.as_mut(),
-            false,
-        )
-        .at(self)?;
+        if let Some(extra) = packed_offs_stream_extra {
+            core.unpack_offsets(
+                src,
+                src_end,
+                packed_offs_stream,
+                extra,
+                offs_scaling,
+                packed_len_stream,
+                self.offs_stream.as_mut(),
+                self.len_stream.as_mut(),
+                false,
+            )
+            .at(self)?;
+        } else {
+            core.unpack_offsets(
+                src,
+                src_end,
+                packed_offs_stream,
+                pointer::null(),
+                offs_scaling,
+                packed_len_stream,
+                self.offs_stream.as_mut(),
+                self.len_stream.as_mut(),
+                false,
+            )
+            .at(self)?;
+        }
 
         Ok(())
     }
@@ -246,7 +261,7 @@ impl LeviathanLzTable {
         &mut self,
         core: &mut Core,
         mode: usize,
-        dst: Pointer,
+        dst: Pointer<{ PointerDest::OUTPUT }>,
         dst_size: usize,
         offset: usize,
     ) -> Res<()> {
@@ -266,14 +281,11 @@ impl LeviathanLzTable {
     pub fn process_lz<Mode: LeviathanMode>(
         &mut self,
         core: &mut Core,
-        mut dst: Pointer,
-        dst_start: Pointer,
-        dst_end: Pointer,
-        window_base: Pointer,
+        mut dst: Pointer<{ PointerDest::OUTPUT }>,
+        dst_start: Pointer<{ PointerDest::OUTPUT }>,
+        dst_end: Pointer<{ PointerDest::OUTPUT }>,
+        window_base: Pointer<{ PointerDest::OUTPUT }>,
     ) -> Res<()> {
-        let multi_cmd = self.cmd_stream.is_null();
-        let mut cmd_stream = self.cmd_stream;
-        let cmd_stream_end = cmd_stream + self.cmd_stream_size;
         let mut len_stream = self.len_stream.iter().copied();
         let mut len_stream_end = self.len_stream.len();
         let mut offs_stream = self.offs_stream.iter().copied().peekable();
@@ -294,35 +306,39 @@ impl LeviathanLzTable {
         let mut mode = Mode::new(self, dst_start, core).at(self)?;
 
         let mut cmd_stream_left = 0;
-        let mut multi_cmd_stream = [Pointer::null(); 8];
-        let mut cmd_stream_ptr = &mut multi_cmd_stream[0];
-        if multi_cmd {
-            for (i, p) in multi_cmd_stream.iter_mut().enumerate() {
-                *p = self
-                    .multi_cmd_ptr
-                    .get_copy(i.wrapping_sub(dst_start.index) & 7)?;
-            }
+        let mut multi_cmd_stream: Option<[Pointer<{ PointerDest::TEMP }>; 8]> = None;
+        let mut cmd_stream_ptr = None;
+        let mut cmd_stream = if let Some(cmd_stream) = self.cmd_stream {
+            cmd_stream
+        } else {
             cmd_stream_left = self.cmd_stream_size;
-            cmd_stream_ptr = &mut multi_cmd_stream[dst.index & 7];
-            cmd_stream = *cmd_stream_ptr;
-        }
+            let streams =
+                core::array::from_fn(|i| self.multi_cmd_ptr[i.wrapping_sub(dst_start.index) & 7]);
+            let cmd_stream = streams[dst.index & 7];
+            multi_cmd_stream = Some(streams);
+            cmd_stream_ptr = multi_cmd_stream
+                .as_mut()
+                .map(|streams| &mut streams[dst.index & 7]);
+            cmd_stream
+        };
+        let cmd_stream_end = cmd_stream + self.cmd_stream_size;
 
         loop {
             let cmd;
 
-            if !multi_cmd {
-                if cmd_stream >= cmd_stream_end {
-                    break;
-                }
-                cmd = core.get_byte(cmd_stream).at(self)? as usize;
-                cmd_stream += 1;
-            } else {
+            if let Some(cmd_stream_ptr) = cmd_stream_ptr.as_mut() {
                 if cmd_stream_left == 0 {
                     break;
                 }
                 cmd_stream_left -= 1;
                 cmd = core.get_byte(cmd_stream).at(self)? as usize;
-                *cmd_stream_ptr = cmd_stream + 1;
+                **cmd_stream_ptr = cmd_stream + 1;
+            } else {
+                if cmd_stream >= cmd_stream_end {
+                    break;
+                }
+                cmd = core.get_byte(cmd_stream).at(self)? as usize;
+                cmd_stream += 1;
             }
 
             let offs_index = cmd >> 5;
@@ -353,18 +369,17 @@ impl LeviathanLzTable {
                 self.assert_le(matchlen, (dst_end - dst)? - 8)?;
                 core.repeat_copy_64(dst, copyfrom, matchlen).at(self)?;
                 dst += matchlen;
-                if multi_cmd {
-                    cmd_stream_ptr = &mut multi_cmd_stream[dst.index & 7];
-                    cmd_stream = *cmd_stream_ptr;
-                }
             } else {
                 core.repeat_copy_64(dst, copyfrom, matchlen).at(self)?;
                 dst += matchlen;
-                if multi_cmd {
-                    cmd_stream_ptr = &mut multi_cmd_stream[dst.index & 7];
-                    cmd_stream = *cmd_stream_ptr;
-                }
             }
+
+            cmd_stream_ptr = if let Some(multi_cmd_stream) = multi_cmd_stream.as_mut() {
+                cmd_stream = multi_cmd_stream[dst.index & 7];
+                Some(&mut multi_cmd_stream[dst.index & 7])
+            } else {
+                None
+            };
         }
 
         // check for incorrect input
@@ -383,14 +398,18 @@ impl LeviathanLzTable {
 }
 
 pub trait LeviathanMode: Sized {
-    fn new(lzt: &LeviathanLzTable, dst_start: Pointer, core: &mut Core) -> Res<Self>;
+    fn new(
+        lzt: &LeviathanLzTable,
+        dst_start: Pointer<{ PointerDest::OUTPUT }>,
+        core: &mut Core,
+    ) -> Res<Self>;
     fn copy_literals<Iter: Iterator<Item = i32>>(
         &mut self,
         core: &mut Core,
         cmd: usize,
-        dst: &mut Pointer,
+        dst: &mut Pointer<{ PointerDest::OUTPUT }>,
         len_stream: &mut Iter,
-        match_zone_end: Pointer,
+        match_zone_end: Pointer<{ PointerDest::OUTPUT }>,
         last_offset: i32,
     ) -> Res<()>;
 
@@ -398,19 +417,19 @@ pub trait LeviathanMode: Sized {
         &mut self,
         core: &mut Core,
         final_len: usize,
-        dst: &mut Pointer,
+        dst: &mut Pointer<{ PointerDest::OUTPUT }>,
         last_offset: i32,
     ) -> Res<()>;
 }
 
 struct LeviathanModeSub {
-    lit_stream: Pointer,
+    lit_stream: Pointer<{ PointerDest::TEMP }>,
 }
 
 impl ErrorContext for LeviathanModeSub {}
 
 impl LeviathanMode for LeviathanModeSub {
-    fn new(lzt: &LeviathanLzTable, _: Pointer, _: &mut Core) -> Res<Self> {
+    fn new(lzt: &LeviathanLzTable, _: Pointer<{ PointerDest::OUTPUT }>, _: &mut Core) -> Res<Self> {
         Ok(Self {
             lit_stream: *lzt.lit_stream.first().err()?,
         })
@@ -419,9 +438,9 @@ impl LeviathanMode for LeviathanModeSub {
         &mut self,
         core: &mut Core,
         cmd: usize,
-        dst: &mut Pointer,
+        dst: &mut Pointer<{ PointerDest::OUTPUT }>,
         len_stream: &mut Iter,
-        _: Pointer,
+        _: Pointer<{ PointerDest::OUTPUT }>,
         last_offset: i32,
     ) -> Res<()> {
         let mut litlen = (cmd >> 3) & 3;
@@ -439,7 +458,7 @@ impl LeviathanMode for LeviathanModeSub {
         &mut self,
         core: &mut Core,
         final_len: usize,
-        dst: &mut Pointer,
+        dst: &mut Pointer<{ PointerDest::OUTPUT }>,
         last_offset: i32,
     ) -> Res<()> {
         core.copy_64_add(*dst, self.lit_stream, *dst + last_offset, final_len)
@@ -450,13 +469,13 @@ impl LeviathanMode for LeviathanModeSub {
 }
 
 struct LeviathanModeRaw {
-    lit_stream: Pointer,
+    lit_stream: Pointer<{ PointerDest::TEMP }>,
 }
 
 impl ErrorContext for LeviathanModeRaw {}
 
 impl LeviathanMode for LeviathanModeRaw {
-    fn new(lzt: &LeviathanLzTable, _: Pointer, _: &mut Core) -> Res<Self> {
+    fn new(lzt: &LeviathanLzTable, _: Pointer<{ PointerDest::OUTPUT }>, _: &mut Core) -> Res<Self> {
         Ok(Self {
             lit_stream: *lzt.lit_stream.first().err()?,
         })
@@ -466,9 +485,9 @@ impl LeviathanMode for LeviathanModeRaw {
         &mut self,
         core: &mut Core,
         cmd: usize,
-        dst: &mut Pointer,
+        dst: &mut Pointer<{ PointerDest::OUTPUT }>,
         len_stream: &mut Iter,
-        _: Pointer,
+        _: Pointer<{ PointerDest::OUTPUT }>,
         _: i32,
     ) -> Res<()> {
         let mut litlen = (cmd >> 3) & 3;
@@ -486,7 +505,7 @@ impl LeviathanMode for LeviathanModeRaw {
         &mut self,
         core: &mut Core,
         final_len: usize,
-        dst: &mut Pointer,
+        dst: &mut Pointer<{ PointerDest::OUTPUT }>,
         _: i32,
     ) -> Res<()> {
         core.repeat_copy_64(*dst, self.lit_stream, final_len)
@@ -497,14 +516,14 @@ impl LeviathanMode for LeviathanModeRaw {
 }
 
 struct LeviathanModeLamSub {
-    lit_stream: Pointer,
-    lam_lit_stream: Pointer,
+    lit_stream: Pointer<{ PointerDest::TEMP }>,
+    lam_lit_stream: Pointer<{ PointerDest::TEMP }>,
 }
 
 impl ErrorContext for LeviathanModeLamSub {}
 
 impl LeviathanMode for LeviathanModeLamSub {
-    fn new(lzt: &LeviathanLzTable, _: Pointer, _: &mut Core) -> Res<Self> {
+    fn new(lzt: &LeviathanLzTable, _: Pointer<{ PointerDest::OUTPUT }>, _: &mut Core) -> Res<Self> {
         if let &[lit_stream, lam_lit_stream] = &*lzt.lit_stream {
             Ok(Self {
                 lit_stream,
@@ -519,9 +538,9 @@ impl LeviathanMode for LeviathanModeLamSub {
         &mut self,
         core: &mut Core,
         cmd: usize,
-        dst: &mut Pointer,
+        dst: &mut Pointer<{ PointerDest::OUTPUT }>,
         len_stream: &mut Iter,
-        match_zone_end: Pointer,
+        match_zone_end: Pointer<{ PointerDest::OUTPUT }>,
         last_offset: i32,
     ) -> Res<()> {
         let lit_cmd = cmd & 0x18;
@@ -556,7 +575,7 @@ impl LeviathanMode for LeviathanModeLamSub {
         &mut self,
         core: &mut Core,
         mut final_len: usize,
-        dst: &mut Pointer,
+        dst: &mut Pointer<{ PointerDest::OUTPUT }>,
         last_offset: i32,
     ) -> Res<()> {
         let lam_byte = core
@@ -574,14 +593,19 @@ impl LeviathanMode for LeviathanModeLamSub {
 }
 
 struct LeviathanModeSubAnd<const NUM: usize> {
-    lit_stream: [Pointer; NUM],
+    lit_stream: [Pointer<{ PointerDest::TEMP }>; NUM],
 }
 
 impl<const T: usize> ErrorContext for LeviathanModeSubAnd<T> {}
 
 impl<const NUM: usize> LeviathanModeSubAnd<NUM> {
     const MASK: usize = NUM - 1;
-    fn copy_literal(&mut self, core: &mut Core, dst: &mut Pointer, last_offset: i32) -> Res<()> {
+    fn copy_literal(
+        &mut self,
+        core: &mut Core,
+        dst: &mut Pointer<{ PointerDest::OUTPUT }>,
+        last_offset: i32,
+    ) -> Res<()> {
         let v = &mut self.lit_stream[dst.index & Self::MASK];
         core.set(
             *dst,
@@ -595,7 +619,11 @@ impl<const NUM: usize> LeviathanModeSubAnd<NUM> {
 }
 
 impl<const NUM: usize> LeviathanMode for LeviathanModeSubAnd<NUM> {
-    fn new(lzt: &LeviathanLzTable, dst_start: Pointer, _: &mut Core) -> Res<Self> {
+    fn new(
+        lzt: &LeviathanLzTable,
+        dst_start: Pointer<{ PointerDest::OUTPUT }>,
+        _: &mut Core,
+    ) -> Res<Self> {
         Ok(Self {
             lit_stream: core::array::from_fn(|i| {
                 lzt.lit_stream[i.wrapping_sub(dst_start.index) & Self::MASK]
@@ -607,9 +635,9 @@ impl<const NUM: usize> LeviathanMode for LeviathanModeSubAnd<NUM> {
         &mut self,
         core: &mut Core,
         cmd: usize,
-        dst: &mut Pointer,
+        dst: &mut Pointer<{ PointerDest::OUTPUT }>,
         len_stream: &mut Iter,
-        match_zone_end: Pointer,
+        match_zone_end: Pointer<{ PointerDest::OUTPUT }>,
         last_offset: i32,
     ) -> Res<()> {
         let lit_cmd = cmd & 0x18;
@@ -632,7 +660,7 @@ impl<const NUM: usize> LeviathanMode for LeviathanModeSubAnd<NUM> {
         &mut self,
         core: &mut Core,
         final_len: usize,
-        dst: &mut Pointer,
+        dst: &mut Pointer<{ PointerDest::OUTPUT }>,
         last_offset: i32,
     ) -> Res<()> {
         for _ in 0..final_len {
@@ -643,7 +671,7 @@ impl<const NUM: usize> LeviathanMode for LeviathanModeSubAnd<NUM> {
 }
 
 struct LeviathanModeO1 {
-    lit_streams: [Pointer; 16],
+    lit_streams: [Pointer<{ PointerDest::TEMP }>; 16],
     next_lit: [u8; 16],
     context: u8,
 }
@@ -652,7 +680,11 @@ impl ErrorContext for LeviathanModeO1 {}
 
 impl LeviathanMode for LeviathanModeO1 {
     #[allow(clippy::indexing_slicing)]
-    fn new(lzt: &LeviathanLzTable, _: Pointer, core: &mut Core) -> Res<Self> {
+    fn new(
+        lzt: &LeviathanLzTable,
+        _: Pointer<{ PointerDest::OUTPUT }>,
+        core: &mut Core,
+    ) -> Res<Self> {
         core.assert_le(16, lzt.lit_stream.len())?;
         let mut result = Self {
             lit_streams: core::array::from_fn(|i| lzt.lit_stream[i] + 1),
@@ -669,9 +701,9 @@ impl LeviathanMode for LeviathanModeO1 {
         &mut self,
         core: &mut Core,
         cmd: usize,
-        dst: &mut Pointer,
+        dst: &mut Pointer<{ PointerDest::OUTPUT }>,
         len_stream: &mut Iter,
-        _: Pointer,
+        _: Pointer<{ PointerDest::OUTPUT }>,
         _: i32,
     ) -> Res<()> {
         let lit_cmd = cmd & 0x18;
@@ -697,7 +729,7 @@ impl LeviathanMode for LeviathanModeO1 {
         &mut self,
         core: &mut Core,
         final_len: usize,
-        dst: &mut Pointer,
+        dst: &mut Pointer<{ PointerDest::OUTPUT }>,
         _: i32,
     ) -> Res<()> {
         self.context = core.get_byte((*dst - 1)?).at(self)?;
@@ -710,7 +742,11 @@ impl LeviathanMode for LeviathanModeO1 {
 
 impl LeviathanModeO1 {
     #[allow(clippy::indexing_slicing)] // u8 >> 4 can safely index [_; 16]
-    fn copy_literal(&mut self, core: &mut Core, dst: &mut Pointer) -> Res<()> {
+    fn copy_literal(
+        &mut self,
+        core: &mut Core,
+        dst: &mut Pointer<{ PointerDest::OUTPUT }>,
+    ) -> Res<()> {
         let slot = (self.context >> 4) as usize;
         self.context = self.next_lit[slot];
         core.set(*dst, self.context).at(self)?;

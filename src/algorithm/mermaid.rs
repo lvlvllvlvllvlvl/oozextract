@@ -1,7 +1,7 @@
 use crate::algorithm::Algorithm;
 use crate::core::error::{ErrorContext, Res, ResultBuilder, WithContext};
-use crate::core::pointer::Pointer;
-use crate::core::Core;
+use crate::core::pointer::{Pointer, PointerDest};
+use crate::core::{pointer, Core};
 use std::collections::VecDeque;
 
 #[derive(Debug)]
@@ -12,10 +12,10 @@ impl Algorithm for Mermaid {
         &self,
         core: &mut Core,
         mode: usize,
-        src: Pointer,
+        src: Pointer<{ PointerDest::INPUT }>,
         src_used: usize,
-        dst_start: Pointer,
-        dst: Pointer,
+        dst_start: Pointer<{ PointerDest::OUTPUT }>,
+        dst: Pointer<{ PointerDest::OUTPUT }>,
         dst_size: usize,
     ) -> Res<()> {
         let offset = (dst - dst_start)?;
@@ -71,15 +71,15 @@ struct MermaidLzTable {
     //    Copy L bytes from match pointed by next offset from |off32_stream|,
     //    relative to start of block.
     //    Then prefetch |off32_stream[3]|
-    cmd_stream: Pointer,
-    cmd_stream_end: Pointer,
+    cmd_stream: Pointer<{ PointerDest::TEMP }>,
+    cmd_stream_end: Pointer<{ PointerDest::TEMP }>,
 
     /// Length stream
-    length_stream: Pointer,
+    length_stream: Pointer<{ PointerDest::INPUT }>,
 
     /// Literal stream
-    lit_stream: Pointer,
-    lit_stream_end: Pointer,
+    lit_stream: Pointer<{ PointerDest::TEMP }>,
+    lit_stream_end: Pointer<{ PointerDest::TEMP }>,
 
     /// Near offsets
     off16_stream: VecDeque<u16>,
@@ -103,8 +103,8 @@ impl MermaidLzTable {
         &mut self,
         core: &mut Core,
         mode: usize,
-        src_end: Pointer,
-        mut dst: Pointer,
+        src_end: Pointer<{ PointerDest::INPUT }>,
+        mut dst: Pointer<{ PointerDest::OUTPUT }>,
         mut dst_size: usize,
         offset: usize,
     ) -> Res<()> {
@@ -160,9 +160,9 @@ impl MermaidLzTable {
     fn process<const ADD_MODE: bool>(
         &mut self,
         core: &mut Core,
-        mut dst: Pointer,
+        mut dst: Pointer<{ PointerDest::OUTPUT }>,
         dst_size: usize,
-        src_end: Pointer,
+        src_end: Pointer<{ PointerDest::INPUT }>,
         saved_dist: &mut i32,
         startoff: i32,
     ) -> Res<()> {
@@ -295,9 +295,9 @@ impl MermaidLzTable {
         &mut self,
         core: &mut Core,
         mode: usize,
-        mut src: Pointer,
-        src_end: Pointer,
-        mut dst: Pointer,
+        mut src: Pointer<{ PointerDest::INPUT }>,
+        src_end: Pointer<{ PointerDest::INPUT }>,
+        mut dst: Pointer<{ PointerDest::OUTPUT }>,
         dst_size: usize,
         offset: usize,
     ) -> Res<()> {
@@ -305,7 +305,7 @@ impl MermaidLzTable {
         let mut decode_count = 0;
         let mut off32_size_2;
         let mut off32_size_1;
-        let mut scratch = Pointer::tmp(0);
+        let mut scratch = pointer::tmp(0);
 
         assert!(mode <= 1, "{}", mode);
         assert!((src_end - src)? >= 10);
@@ -326,7 +326,7 @@ impl MermaidLzTable {
                 &mut decode_count,
                 dst_size,
                 false,
-                Pointer::scratch(0),
+                pointer::scratch(0),
             )
             .at(self)?;
         self.lit_stream = out;
@@ -343,7 +343,7 @@ impl MermaidLzTable {
                 &mut decode_count,
                 dst_size,
                 false,
-                Pointer::scratch(0),
+                pointer::scratch(0),
             )
             .at(self)?;
         self.cmd_stream = out;
@@ -379,7 +379,7 @@ impl MermaidLzTable {
                     &mut off16_hi_count,
                     dst_size >> 1,
                     false,
-                    Pointer::scratch(0),
+                    pointer::scratch(0),
                 )
                 .at(self)?;
             scratch += off16_hi_count;
@@ -393,7 +393,7 @@ impl MermaidLzTable {
                     &mut off16_lo_count,
                     dst_size >> 1,
                     false,
-                    Pointer::scratch(0),
+                    pointer::scratch(0),
                 )
                 .at(self)?;
             scratch += off16_lo_count;
@@ -463,8 +463,8 @@ impl MermaidLzTable {
     fn decode_far_offsets(
         &mut self,
         core: &mut Core,
-        src: Pointer,
-        src_end: Pointer,
+        src: Pointer<{ PointerDest::INPUT }>,
+        src_end: Pointer<{ PointerDest::INPUT }>,
         stream1: bool,
         output_size: usize,
         offset: usize,

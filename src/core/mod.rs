@@ -17,9 +17,9 @@ pub(crate) struct Core<'a> {
     pub output: &'a mut [u8],
     pub scratch: &'a mut Vec<u8>,
     pub tmp: &'a mut Vec<u8>,
-    pub src: Pointer,
-    pub dst: Pointer,
-    pub dst_end: Pointer,
+    pub src: Pointer<{ PointerDest::INPUT }>,
+    pub dst: Pointer<{ PointerDest::OUTPUT }>,
+    pub dst_end: Pointer<{ PointerDest::OUTPUT }>,
 }
 
 impl Core<'_> {
@@ -36,9 +36,9 @@ impl Core<'_> {
             output,
             scratch,
             tmp,
-            src: Pointer::input(0),
-            dst: Pointer::output(offset),
-            dst_end: Pointer::output(offset + out_len),
+            src: pointer::input(0),
+            dst: pointer::output(offset),
+            dst_end: pointer::output(offset + out_len),
         }
     }
 
@@ -46,8 +46,8 @@ impl Core<'_> {
     /// internally that are compressed separately but with a shared history.
     pub fn decode_quantum<T: Algorithm>(&mut self, algorithm: T) -> Res<usize> {
         let mut written_bytes = 0;
-        let src_end = Pointer::input(self.input.len());
-        let dst_start = Pointer::output(0);
+        let src_end = pointer::input(self.input.len());
+        let dst_start = pointer::output(0);
         let mut src_used;
 
         while self.dst_end > self.dst {
@@ -66,7 +66,7 @@ impl Core<'_> {
                         &mut written_bytes,
                         dst_count,
                         false,
-                        Pointer::scratch(0),
+                        pointer::scratch(0),
                     )
                     .at(self)?;
                 self.assert_eq(written_bytes, dst_count)?;
@@ -100,14 +100,14 @@ impl Core<'_> {
     }
 
     /// Unpacks the packed 8 bit offset and lengths into 32 bit.
-    pub fn unpack_offsets(
+    pub fn unpack_offsets<const OFFS: u8, const EXT: u8, const LIT: u8>(
         &mut self,
-        src: Pointer,
-        src_end: Pointer,
-        mut packed_offs_stream: Pointer,
-        packed_offs_stream_extra: Pointer,
+        src: Pointer<{ PointerDest::INPUT }>,
+        src_end: Pointer<{ PointerDest::INPUT }>,
+        mut packed_offs_stream: Pointer<OFFS>,
+        packed_offs_stream_extra: Pointer<EXT>,
         multi_dist_scale: i32,
-        mut packed_litlen_stream: Pointer,
+        mut packed_litlen_stream: Pointer<LIT>,
         offs_stream: &mut [i32],
         len_stream: &mut [i32],
         excess_flag: bool,
@@ -169,7 +169,7 @@ impl Core<'_> {
                 offs = ((8 + (cmd & 7)) << (cmd >> 3))
                     | bits_a.read_more_than24bits(self, cmd >> 3).at(self)?;
                 c[0] = 8 - offs;
-                if c.len() == 2 {
+                if c.len() > 1 {
                     cmd = i32::from(self.get_byte(packed_offs_stream)?);
                     packed_offs_stream += 1;
                     self.assert_le(cmd >> 3, 26)?;
@@ -221,11 +221,11 @@ impl Core<'_> {
         Ok(())
     }
 
-    fn combine_scaled_offset_arrays(
+    fn combine_scaled_offset_arrays<const SRC: u8>(
         &mut self,
         offs_stream: &mut [i32],
         scale: i32,
-        mut low_bits: Pointer,
+        mut low_bits: Pointer<SRC>,
     ) -> Res<()> {
         for val in offs_stream.iter_mut() {
             *val *= scale;
@@ -235,15 +235,15 @@ impl Core<'_> {
         Ok(())
     }
 
-    pub fn decode_bytes(
+    pub fn decode_bytes<const SRC: u8, const DST: u8, const TMP: u8>(
         &mut self,
-        output: &mut Pointer,
-        mut src: Pointer,
-        src_end: Pointer,
+        output: &mut Pointer<DST>,
+        mut src: Pointer<SRC>,
+        src_end: Pointer<SRC>,
         decoded_size: &mut usize,
         output_size: usize,
         force_memmove: bool,
-        mut scratch: Pointer,
+        mut scratch: Pointer<TMP>,
     ) -> Res<usize> {
         let src_org = src;
         let src_size;
@@ -269,10 +269,10 @@ impl Core<'_> {
             self.assert_le(src_size, output_size)?;
             self.assert_le(src_size, (src_end - src)?)?;
             *decoded_size = src_size;
-            if force_memmove {
+            if force_memmove || SRC != DST {
                 self.copy_bytes(*output, src, src_size).at(self)?;
             } else {
-                *output = src;
+                output.index = src.index;
             }
             return Ok((src + src_size - src_org)?);
         }
@@ -300,7 +300,7 @@ impl Core<'_> {
         self.assert_le(dst_size, output_size)?;
 
         let dst = *output;
-        if dst.into == PointerDest::Scratch {
+        if dst.dest() == PointerDest::Scratch {
             scratch += dst_size;
         }
 
@@ -318,11 +318,11 @@ impl Core<'_> {
         Ok((src + src_size - src_org)?)
     }
 
-    fn decode_bytes_type12(
+    fn decode_bytes_type12<const SRC: u8, const DST: u8>(
         &mut self,
-        mut src: Pointer,
+        mut src: Pointer<SRC>,
         src_size: usize,
-        output: Pointer,
+        output: Pointer<DST>,
         output_size: usize,
         chunk_type: usize,
     ) -> Res<usize> {
@@ -420,9 +420,9 @@ impl Core<'_> {
         Ok(src_size)
     }
 
-    fn huff_read_code_lengths_old(
+    fn huff_read_code_lengths_old<const SRC: u8>(
         &mut self,
-        bits: &mut BitReader,
+        bits: &mut BitReader<SRC>,
         syms: &mut [u8; 1280],
         code_prefix: &mut [usize; 12],
     ) -> Res<i32> {
@@ -499,9 +499,9 @@ impl Core<'_> {
         }
     }
 
-    fn huff_read_code_lengths_new(
+    fn huff_read_code_lengths_new<const SRC: u8>(
         &mut self,
-        bits: &mut BitReader,
+        bits: &mut BitReader<SRC>,
         syms: &mut [u8; 1280],
         code_prefix: &mut [usize; 12],
     ) -> Res<i32> {
@@ -563,10 +563,10 @@ impl Core<'_> {
         Ok(num_symbols)
     }
 
-    pub fn decode_golomb_rice_lengths(
+    pub fn decode_golomb_rice_lengths<const SRC: u8>(
         &mut self,
         mut dst: &mut [u8],
-        br: &mut BitReader2,
+        br: &mut BitReader2<SRC>,
     ) -> Res<()> {
         const K_RICE_CODE_BITS2VALUE: [u32; 256] = [
             0x80000000, 0x00000007, 0x10000006, 0x00000006, 0x20000005, 0x00000105, 0x10000005,
@@ -666,11 +666,11 @@ impl Core<'_> {
         Ok(())
     }
 
-    fn decode_golomb_rice_bits(
+    fn decode_golomb_rice_bits<const SRC: u8>(
         &mut self,
         mut dst: &mut [u8],
         bitcount: usize,
-        br: &mut BitReader2,
+        br: &mut BitReader2<SRC>,
     ) -> Res<()> {
         if bitcount == 0 {
             return Ok(());
@@ -732,12 +732,12 @@ impl Core<'_> {
         Ok(())
     }
 
-    pub fn convert_to_ranges(
+    pub fn convert_to_ranges<const SRC: u8>(
         &mut self,
         num_symbols: i32,
         p: usize,
         syms: &[u8],
-        bits: &mut BitReader,
+        bits: &mut BitReader<SRC>,
     ) -> Res<Vec<HuffRange>> {
         let mut sym_idx = 0;
         let mut symlen = num_symbols as usize;
@@ -785,13 +785,13 @@ impl Core<'_> {
         Ok(ranges)
     }
 
-    fn decode_recursive(
+    fn decode_recursive<const SRC: u8, const DST: u8, const TMP: u8>(
         &mut self,
-        src_org: Pointer,
+        src_org: Pointer<SRC>,
         src_size: usize,
-        mut output: Pointer,
+        mut output: Pointer<DST>,
         output_size: usize,
-        scratch: Pointer,
+        scratch: Pointer<TMP>,
     ) -> Res<usize> {
         let mut src = src_org;
         let output_end = output + output_size;
@@ -846,18 +846,18 @@ impl Core<'_> {
         }
     }
 
-    pub fn decode_multi_array(
+    pub fn decode_multi_array<const SRC: u8, const DST: u8, const TMP: u8>(
         &mut self,
-        src_org: Pointer,
-        src_end: Pointer,
-        mut dst: Pointer,
-        dst_end: Pointer,
-        array_data: &mut Vec<Pointer>,
+        src_org: Pointer<SRC>,
+        src_end: Pointer<SRC>,
+        mut dst: Pointer<DST>,
+        dst_end: Pointer<DST>,
+        array_data: &mut Vec<Pointer<DST>>,
         array_lens: &mut Vec<usize>,
         array_count: usize,
         total_size_out: &mut usize,
         force_memmove: bool,
-        scratch: Pointer,
+        scratch: Pointer<TMP>,
     ) -> Res<usize> {
         let mut src = src_org;
 
@@ -1107,10 +1107,10 @@ impl Core<'_> {
         Ok((src_end_actual - src_org)?)
     }
 
-    fn get_block_size(
+    fn get_block_size<const SRC: u8>(
         &mut self,
-        src_org: Pointer,
-        src_end: Pointer,
+        src_org: Pointer<SRC>,
+        src_end: Pointer<SRC>,
         dest_capacity: usize,
     ) -> Res<usize> {
         let mut src = src_org;
@@ -1157,22 +1157,21 @@ impl Core<'_> {
         Ok(dst_size)
     }
 
-    fn decode_rle(
+    fn decode_rle<const SRC: u8, const DST: u8, const TMP: u8>(
         &mut self,
-        src: Pointer,
+        src: Pointer<SRC>,
         src_size: usize,
-        mut dst: Pointer,
+        dst: Pointer<DST>,
         dst_size: usize,
-        scratch: Pointer,
+        scratch: Pointer<TMP>,
     ) -> Res<usize> {
         self.assert_ne(src_size, 0)?;
+
         if src_size == 1 {
             self.memset(dst, self.get_byte(src)?, dst_size).at(self)?;
             return Ok(1);
         }
-        let dst_end = dst + dst_size;
-        let mut cmd_ptr = src + 1;
-        let mut cmd_ptr_end = src + src_size;
+
         // Unpack the first X bytes of the command buffer?
         if self.get_byte(src)? != 0 {
             let mut dst_ptr = scratch;
@@ -1192,9 +1191,23 @@ impl Core<'_> {
             let cmd_len = src_size - n + dec_size;
             self.copy_bytes(dst_ptr + dec_size, src + n, src_size - n)
                 .at(self)?;
-            cmd_ptr = dst_ptr;
-            cmd_ptr_end = dst_ptr + cmd_len;
+            self.decode_rle_unpacked(dst_ptr, dst_ptr + cmd_len, dst, dst_size)
+                .at(self)?;
+        } else {
+            self.decode_rle_unpacked(src + 1, src + src_size, dst, dst_size)
+                .at(self)?;
         }
+        Ok(src_size)
+    }
+
+    fn decode_rle_unpacked<const SRC: u8, const DST: u8>(
+        &mut self,
+        mut cmd_ptr: Pointer<SRC>,
+        mut cmd_ptr_end: Pointer<SRC>,
+        mut dst: Pointer<DST>,
+        dst_size: usize,
+    ) -> Res<()> {
+        let dst_end = dst + dst_size;
 
         let mut rle_byte = 0;
 
@@ -1247,14 +1260,14 @@ impl Core<'_> {
         self.assert_eq(cmd_ptr, cmd_ptr_end)?;
         self.assert_eq(dst, dst_end)?;
 
-        Ok(src_size)
+        Ok(())
     }
 
-    fn decode_tans(
+    fn decode_tans<const SRC: u8, const DST: u8>(
         &mut self,
-        mut src: Pointer,
+        mut src: Pointer<SRC>,
         src_size: usize,
-        dst: Pointer,
+        dst: Pointer<DST>,
         dst_size: usize,
     ) -> Res<usize> {
         self.assert_le(8, src_size)?;

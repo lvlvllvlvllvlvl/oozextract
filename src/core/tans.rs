@@ -4,12 +4,12 @@ use crate::core::pointer::Pointer;
 use crate::core::Core;
 
 #[derive(Default)]
-pub struct TansDecoder {
+pub struct TansDecoder<const SRC: u8, const DST: u8> {
     pub lut: Vec<TansLutEnt>,
-    pub dst: Pointer,
-    pub dst_end: Pointer,
-    pub ptr_f: Pointer,
-    pub ptr_b: Pointer,
+    pub dst: Pointer<DST>,
+    pub dst_end: Pointer<DST>,
+    pub ptr_f: Pointer<SRC>,
+    pub ptr_b: Pointer<SRC>,
     pub bits_f: usize,
     pub bits_b: usize,
     pub bitpos_f: i32,
@@ -17,9 +17,9 @@ pub struct TansDecoder {
     pub state: [usize; 5],
 }
 
-impl ErrorContext for TansDecoder {}
+impl<const SRC: u8, const DST: u8> ErrorContext for TansDecoder<SRC, DST> {}
 
-impl TansDecoder {
+impl<const SRC: u8, const DST: u8> TansDecoder<SRC, DST> {
     pub fn decode(&mut self, core: &mut Core) -> Res<()> {
         assert!(
             self.ptr_f <= self.ptr_b,
@@ -217,7 +217,7 @@ impl TansDecoder {
     pub fn decode_table(
         &mut self,
         core: &mut Core,
-        bits: &mut BitReader,
+        bits: &mut BitReader<SRC>,
         l_bits: i32,
     ) -> Res<TansData> {
         let mut tans_data = TansData {

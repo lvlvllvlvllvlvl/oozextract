@@ -2,25 +2,25 @@ use crate::core::error::{ErrorContext, Res, WithContext};
 use crate::core::pointer::Pointer;
 use crate::core::Core;
 
-pub struct BitReader {
+pub struct BitReader<const SRC: u8> {
     /// |p| holds the current u8 and |p_end| the end of the buffer.
-    pub p: Pointer,
-    pub p_end: Pointer,
+    pub p: Pointer<SRC>,
+    pub p_end: Pointer<SRC>,
     /// Bits accumulated so far
     pub bits: u32,
     /// Next u8 will end up in the |bitpos| position in |bits|.
     pub bitpos: i32,
 }
 
-impl ErrorContext for BitReader {}
+impl<const SRC: u8> ErrorContext for BitReader<SRC> {}
 
-pub struct BitReader2 {
-    pub p: Pointer,
-    pub p_end: Pointer,
+pub struct BitReader2<const SRC: u8> {
+    pub p: Pointer<SRC>,
+    pub p_end: Pointer<SRC>,
     pub bitpos: u32,
 }
 
-impl BitReader {
+impl<const SRC: u8> BitReader<SRC> {
     /// Read more bytes to make sure we always have at least 24 bits in |bits|.
     pub fn refill(&mut self, source: &Core) -> Res<()> {
         assert!(self.bitpos <= 24);
