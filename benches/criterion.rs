@@ -7,6 +7,7 @@ use std::io::Read;
 use std::ops::BitXor;
 use std::path::PathBuf;
 
+#[cfg(feature = "x86_sse")]
 pub fn reverse_huff_lut(c: &mut Criterion) {
     let mut group = c.benchmark_group("simd");
     let mut aligned_input: [u64; 258] = [0; 258];
@@ -73,6 +74,12 @@ pub fn extract_from_slice(c: &mut Criterion) {
     }
 }
 
+#[cfg(feature = "x86_sse")]
 criterion_group!(simd, reverse_huff_lut);
 criterion_group!(extract, extract_from_slice);
-criterion_main!(simd, extract);
+fn main() {
+    #[cfg(feature = "x86_sse")]
+    simd();
+    extract();
+    Criterion::default().configure_from_args().final_summary();
+}

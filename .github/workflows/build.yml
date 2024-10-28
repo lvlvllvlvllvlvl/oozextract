@@ -17,9 +17,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build
-        env:
-          FLAGS: -C target-feature=+simd128
-          RUSTFLAGS: -C target-feature=+simd128
         run: |
           cargo install cargo-all-features wasm-pack
           cargo build-all-features

@@ -287,7 +287,7 @@ impl Core<'_> {
     /// llvm prefetch intrinsic is only made available on x86 (via _mm_prefetch),
     /// for any other arch this function is just a placeholder
     pub fn prefetch<const SRC: u8>(&mut self, p: Pointer<SRC>) {
-        let target = match p.dest() {
+        let _target = match p.dest() {
             PointerDest::Null => panic!(),
             PointerDest::Input => self.input,
             PointerDest::Output => self.output,
@@ -297,7 +297,7 @@ impl Core<'_> {
         .get(p.index);
 
         #[cfg(all(feature = "x86_sse", any(target_arch = "x86", target_arch = "x86_64")))]
-        if let Some(v) = target {
+        if let Some(v) = _target {
             #[cfg(target_arch = "x86")]
             use core::arch::x86::*;
             #[cfg(target_arch = "x86_64")]
@@ -351,8 +351,11 @@ impl Core<'_> {
         rhs: Pointer<DEST>,
         n: usize,
     ) -> Res<()> {
-        if rhs.index.abs_diff(dest.index) < 16 {
-            for i in 0..=n / 8 {
+        if n == 0 {
+            return Ok(());
+        }
+        if rhs.index.abs_diff(dest.index) < 16 || n <= 8 {
+            for i in 0..=(n - 1) / 8 {
                 let l: u8x16 =
                     bytemuck::cast(u64x2::splat(u64::from_ne_bytes(self.get_arr(lhs + i * 8)?)));
                 let r: u8x16 =
@@ -361,7 +364,7 @@ impl Core<'_> {
                 self.set_arr(dest + i * 8, sum.as_array_ref()[0].to_ne_bytes())?
             }
         } else {
-            for i in 0..=n / 16 {
+            for i in 0..=(n - 1) / 16 {
                 let l = u8x16::from(self.get_arr(lhs + i * 16)?);
                 let r = u8x16::from(self.get_arr(rhs + i * 16)?);
                 let sum = l + r;

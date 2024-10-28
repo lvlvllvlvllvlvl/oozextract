@@ -35,7 +35,6 @@ wasm-opt = ['-O4']
 [[bench]]
 name = "criterion"
 harness = false
-required-features = ["x86_sse"]
 
 [features]
 x86_sse = []
