@@ -106,7 +106,7 @@ impl<const SRC: u8, const DST: u8> HuffReader<SRC, DST> {
                 src_mid_bitpos -= n as i32;
                 tmp[5] = lut.bits2sym.get_copy(k)?;
 
-                core.set_bytes(dst, &tmp).at(self)?;
+                core.set_arr(dst, tmp).at(self)?;
                 dst += 6;
             }
             dst_end += 5;

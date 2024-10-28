@@ -218,7 +218,10 @@ impl Core<'_> {
         bytes[B - n..].copy_from_slice(self.get_slice(p, n)?);
         Ok(usize::from_be_bytes(bytes))
     }
-    pub fn get_64<const DEST: u8>(&mut self, p: Pointer<DEST>) -> Res<u64> {
+    pub fn get_arr<const DEST: u8, const LEN: usize>(
+        &mut self,
+        p: Pointer<DEST>,
+    ) -> Res<[u8; LEN]> {
         let src = match p.dest() {
             PointerDest::Null => panic!(),
             PointerDest::Input => self.input,
@@ -226,16 +229,21 @@ impl Core<'_> {
             PointerDest::Scratch => self.scratch,
             PointerDest::Temp => self.tmp,
         };
-        let len = 8.min(src.len() - p.index);
+        let len = LEN.min(src.len() - p.index);
         let slice = &src[p.index..p.index + len];
-        if len == 8 {
-            Ok(bytemuck::pod_read_unaligned(slice))
+        if len == LEN {
+            Ok(slice.try_into().expect("len == LEN"))
         } else {
-            let bytes = core::array::from_fn(|i| slice.get(i).copied().unwrap_or_default());
-            Ok(u64::from_ne_bytes(bytes))
+            Ok(core::array::from_fn(|i| {
+                slice.get(i).copied().unwrap_or_default()
+            }))
         }
     }
-    pub fn set_64<const DEST: u8>(&mut self, p: Pointer<DEST>, v: u64) -> Res<()> {
+    pub fn set_arr<const DEST: u8, const LEN: usize>(
+        &mut self,
+        p: Pointer<DEST>,
+        v: [u8; LEN],
+    ) -> Res<()> {
         let src = match p.dest() {
             PointerDest::Null => panic!(),
             PointerDest::Input => panic!(),
@@ -243,10 +251,8 @@ impl Core<'_> {
             PointerDest::Scratch => &mut self.scratch,
             PointerDest::Temp => &mut self.tmp,
         };
-        let len = 8.min(src.len() - p.index);
-        for i in 0..len {
-            src[p.index + i] = v.to_ne_bytes()[i]
-        }
+        let len = LEN.min(src.len() - p.index);
+        src[p.index..p.index + len].copy_from_slice(&v[..len]);
         Ok(())
     }
 
@@ -311,13 +317,7 @@ impl Core<'_> {
         src: Pointer<SRC>,
         bytes: usize,
     ) -> Res<()> {
-        if cfg!(target_arch = "wasm32") {
-            for i in 0..=bytes / 8 {
-                let v = self.get_64(src + i * 8)?;
-                self.set_64(dest + i * 8, v)?
-            }
-            Ok(())
-        } else if dest.dest() != src.dest() || bytes < src.index.abs_diff(dest.index) {
+        if dest.dest() != src.dest() || bytes < src.index.abs_diff(dest.index) {
             self.copy_bytes(dest, src, bytes)
         } else {
             dest.debug(bytes);
@@ -344,18 +344,29 @@ impl Core<'_> {
         }
     }
 
-    pub fn copy_64_add<const DEST: u8, const LHS: u8, const RHS: u8>(
+    pub fn copy_64_add<const DEST: u8, const LHS: u8>(
         &mut self,
         dest: Pointer<DEST>,
         lhs: Pointer<LHS>,
-        rhs: Pointer<RHS>,
+        rhs: Pointer<DEST>,
         n: usize,
     ) -> Res<()> {
-        for i in 0..=n / 8 {
-            let l: u8x16 = bytemuck::cast(u64x2::splat(self.get_64(lhs + i * 8)?));
-            let r: u8x16 = bytemuck::cast(u64x2::splat(self.get_64(rhs + i * 8)?));
-            let sum: u64x2 = bytemuck::cast(l + r);
-            self.set_64(dest + i * 8, sum.as_array_ref()[0])?
+        if rhs.index.abs_diff(dest.index) < 16 {
+            for i in 0..=n / 8 {
+                let l: u8x16 =
+                    bytemuck::cast(u64x2::splat(u64::from_ne_bytes(self.get_arr(lhs + i * 8)?)));
+                let r: u8x16 =
+                    bytemuck::cast(u64x2::splat(u64::from_ne_bytes(self.get_arr(rhs + i * 8)?)));
+                let sum: u64x2 = bytemuck::cast(l + r);
+                self.set_arr(dest + i * 8, sum.as_array_ref()[0].to_ne_bytes())?
+            }
+        } else {
+            for i in 0..=n / 16 {
+                let l = u8x16::from(self.get_arr(lhs + i * 16)?);
+                let r = u8x16::from(self.get_arr(rhs + i * 16)?);
+                let sum = l + r;
+                self.set_arr(dest + i * 16, *sum.as_array_ref())?
+            }
         }
         Ok(())
     }
