@@ -245,7 +245,7 @@ pub fn reverse_lut(input: &[u64; 258]) -> [u8; 2048] {
 }
 
 /// 2567.903645833333 ns/iter (+/- 149.404296875) on my machine
-#[allow(dead_code)]
+#[allow(dead_code, clippy::indexing_slicing)]
 pub fn reverse_naive(input: &[u8; 2064]) -> [u8; 2048] {
     std::array::from_fn(|i| input[((i as u16).reverse_bits() >> 5) as usize])
 }
@@ -370,6 +370,7 @@ mod tests {
     use super::*;
 
     #[test_log::test]
+    #[allow(clippy::indexing_slicing, clippy::unwrap_used)]
     fn simd_test() {
         let input: [u8; 2064] = std::array::from_fn(|i| (i as u8).bitxor((i >> 8) as u8));
         let naive = reverse_naive(&input);

@@ -159,7 +159,9 @@ impl KrakenLzTable {
                 packed_offs_stream_extra = Some(scratch);
                 n = core
                     .decode_bytes(
-                        packed_offs_stream_extra.as_mut().unwrap(),
+                        packed_offs_stream_extra
+                            .as_mut()
+                            .expect("value assigned just above"),
                         src,
                         src_end,
                         &mut decode_count,

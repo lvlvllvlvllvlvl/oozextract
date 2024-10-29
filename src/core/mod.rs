@@ -832,9 +832,7 @@ impl Core<'_> {
                     src_end,
                     output,
                     output_end,
-                    &mut Vec::new(),
-                    &mut Vec::new(),
-                    1,
+                    &mut [Default::default(); 1],
                     &mut decoded_size,
                     true,
                     scratch,
@@ -852,9 +850,7 @@ impl Core<'_> {
         src_end: Pointer<SRC>,
         mut dst: Pointer<DST>,
         dst_end: Pointer<DST>,
-        array_data: &mut Vec<Pointer<DST>>,
-        array_lens: &mut Vec<usize>,
-        array_count: usize,
+        array_data: &mut [(Pointer<DST>, usize)],
         total_size_out: &mut usize,
         force_memmove: bool,
         scratch: Pointer<TMP>,
@@ -872,7 +868,7 @@ impl Core<'_> {
         let mut total_size = 0;
 
         if num_arrays_in_file == 0 {
-            for _ in 0..array_count {
+            for arr in array_data.iter_mut() {
                 let mut chunk_dst = dst;
                 let dec = self
                     .decode_bytes(
@@ -886,8 +882,7 @@ impl Core<'_> {
                     )
                     .at(self)?;
                 dst += decoded_size;
-                array_data.push(chunk_dst);
-                array_lens.push(decoded_size);
+                *arr = (chunk_dst, decoded_size);
                 src += dec;
                 total_size += decoded_size;
             }
@@ -929,8 +924,7 @@ impl Core<'_> {
 
         let num_indexes = self.get_block_size(src, src_end, total_size).at(self)?;
 
-        let mut num_lens = num_indexes - array_count;
-        self.assert_ne(num_lens, 0)?;
+        let mut num_lens = num_indexes - array_data.len();
 
         let mut interval_lenlog2 = scratch_cur;
         scratch_cur += num_indexes;
@@ -962,7 +956,7 @@ impl Core<'_> {
 
             num_lens = num_indexes;
         } else {
-            let lenlog2_chunksize = num_indexes - array_count;
+            let lenlog2_chunksize = num_indexes - array_data.len();
 
             let mut size_out = 0;
             let n = self
@@ -1067,8 +1061,8 @@ impl Core<'_> {
         let mut leni = 0;
         let increment_leni = (q & 0x8000) != 0;
 
-        for arri in 0..array_count {
-            array_data.push(dst);
+        for arr in array_data.iter_mut() {
+            let start = dst;
 
             self.assert_lt(indi, num_indexes)?;
 
@@ -1094,7 +1088,7 @@ impl Core<'_> {
             if increment_leni {
                 leni += 1;
             }
-            array_lens.push(dst - array_data[arri]);
+            *arr = (start, dst - start);
         }
 
         self.assert_eq(indi, num_indexes)?;

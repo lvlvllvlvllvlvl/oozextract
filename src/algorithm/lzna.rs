@@ -1,4 +1,5 @@
 use crate::core::error::{ErrorContext, Res};
+use bytes::Buf;
 use std::array;
 use wide::{i16x16, i16x8, CmpGt};
 
@@ -171,7 +172,6 @@ pub struct Lzna<'a> {
     bits_b: u64,
     input: &'a [u8],
     output: &'a mut [u8],
-    src: usize,
     dst: usize,
 }
 
@@ -183,7 +183,6 @@ impl<'a> Lzna<'a> {
             input,
             output,
             dst,
-            src: 0,
             bits_a: 0,
             bits_b: 0,
         }
@@ -191,32 +190,31 @@ impl<'a> Lzna<'a> {
 
     /// Initialize bit reader with 2 parallel streams. Every decode operation
     /// swaps the two streams.
-    fn init(&mut self) {
-        self.bits_a = self.init_bits();
-        self.bits_b = self.init_bits();
+    fn init(&mut self) -> Res<()> {
+        self.bits_a = self.init_bits()?;
+        self.bits_b = self.init_bits()?;
+        Ok(())
     }
 
-    fn init_bits(&mut self) -> u64 {
-        let d = self.read_byte() as i32;
+    fn init_bits(&mut self) -> Res<u64> {
+        let d = self.read_byte()? as i32;
         let n = d >> 4;
         assert!(n <= 8, "{}", n);
         let mut v = 0u64;
         for _ in 0..n {
-            v = (v << 8) | self.read_byte() as u64;
+            v = (v << 8) | self.read_byte()? as u64;
         }
-        (v << 4) | (d & 0xF) as u64
+        Ok((v << 4) | (d & 0xF) as u64)
     }
 
-    fn read_byte(&mut self) -> u8 {
-        let v = self.input[self.src];
-        self.src += 1;
-        v
+    fn read_byte(&mut self) -> Res<u8> {
+        self.assert_le(1, self.input.len())?;
+        Ok(self.input.get_u8())
     }
 
-    fn read(&mut self) -> u32 {
-        let v = u32::from_le_bytes(*self.input[self.src..].first_chunk().unwrap());
-        self.src += 4;
-        v
+    fn read(&mut self) -> Res<u32> {
+        self.assert_le(4, self.input.len())?;
+        Ok(self.input.get_u32_le())
     }
 
     fn write(&mut self, v: u8) {
@@ -241,33 +239,34 @@ impl<'a> Lzna<'a> {
     }
 
     /// Renormalize by filling up the RANS state and swapping the two streams
-    fn renormalize(&mut self) {
+    fn renormalize(&mut self) -> Res<()> {
         let mut x = self.bits_a;
         if x < 0x80000000 {
-            x = (x << 32) | self.read() as u64;
+            x = (x << 32) | self.read()? as u64;
         }
         self.bits_a = self.bits_b;
         self.bits_b = x;
+        Ok(())
     }
 
     /// Read a single bit with a uniform distribution.
-    fn read_bool(&mut self) -> bool {
+    fn read_bool(&mut self) -> Res<bool> {
         let r = self.bits_a & 1;
         self.bits_a >>= 1;
-        self.renormalize();
-        r == 1
+        self.renormalize()?;
+        Ok(r == 1)
     }
 
     /// Read a number of bits with a uniform distribution.
-    fn read_n_bits(&mut self, bits: usize) -> usize {
+    fn read_n_bits(&mut self, bits: usize) -> Res<usize> {
         let rv = self.bits_a & ((1 << bits) - 1);
         self.bits_a >>= bits;
-        self.renormalize();
-        rv as usize
+        self.renormalize()?;
+        Ok(rv as usize)
     }
 
     /// Read a 4-bit value using an adaptive RANS model
-    fn read_nibble(&mut self, model: &mut LznaNibbleModel) -> usize {
+    fn read_nibble(&mut self, model: &mut LznaNibbleModel) -> Res<usize> {
         let x = self.bits_a;
 
         let arr = model.prob.as_array_ref();
@@ -284,12 +283,12 @@ impl<'a> Lzna<'a> {
         model.prob += update;
 
         self.bits_a = (end - start) * (x >> 15) + (x & 0x7FFF) - start;
-        self.renormalize();
-        bitindex - 1
+        self.renormalize()?;
+        Ok(bitindex - 1)
     }
 
     /// Read a 3-bit value using an adaptive RANS model
-    fn read_3_bits(&mut self, model: &mut Lzna3bitModel) -> usize {
+    fn read_3_bits(&mut self, model: &mut Lzna3bitModel) -> Res<usize> {
         let x = self.bits_a;
 
         let arr = model.prob.as_array_ref();
@@ -306,80 +305,81 @@ impl<'a> Lzna<'a> {
         model.prob += update;
 
         self.bits_a = (end - start) * (x >> 15) + (x & 0x7FFF) - start;
-        self.renormalize();
-        bitindex - 1
+        self.renormalize()?;
+        Ok(bitindex - 1)
     }
 
     /// Read a 1-bit value using an adaptive RANS model
-    fn read_1_bit(&mut self, model: &mut LznaBitModel, nbits: i32, shift: i32) -> usize {
+    fn read_1_bit(&mut self, model: &mut LznaBitModel, nbits: i32, shift: i32) -> Res<usize> {
         assert!(nbits < 32);
         let magn = 1u64 << nbits;
         let q = *model as u64 * (self.bits_a >> nbits);
         if (self.bits_a & (magn - 1)) >= *model as u64 {
             self.bits_a -= q + *model as u64;
             *model = *model - (*model >> shift);
-            self.renormalize();
-            1
+            self.renormalize()?;
+            Ok(1)
         } else {
             self.bits_a = (self.bits_a & (magn - 1)) + q;
             *model += ((magn - *model as u64) >> shift) as LznaBitModel;
-            self.renormalize();
-            0
+            self.renormalize()?;
+            Ok(0)
         }
     }
 
     /// Read a far distance using the far distance model
-    fn read_far_distance(&mut self, lut: &mut LznaState) -> usize {
-        let mut n = self.read_nibble(&mut lut.far_distance.first_lo);
+    fn read_far_distance(&mut self, lut: &mut LznaState) -> Res<usize> {
+        let mut n = self.read_nibble(&mut lut.far_distance.first_lo)?;
         let mut hi;
         if n >= 15 {
-            n = 15 + self.read_nibble(&mut lut.far_distance.first_hi);
+            n = 15 + self.read_nibble(&mut lut.far_distance.first_hi)?;
         }
         hi = 0;
         if n != 0 {
-            hi = self.read_1_bit(&mut lut.far_distance.second[n - 1], 14, 6) + 2;
+            hi = self.read_1_bit(&mut lut.far_distance.second[n - 1], 14, 6)? + 2;
             if n != 1 {
-                hi = (hi << 1) + self.read_1_bit(&mut lut.far_distance.third[hi - 2][n - 1], 14, 6);
+                hi = (hi << 1)
+                    + self.read_1_bit(&mut lut.far_distance.third[hi - 2][n - 1], 14, 6)?;
                 if n != 2 {
-                    hi = (hi << (n - 2)) + self.read_n_bits(n - 2);
+                    hi = (hi << (n - 2)) + self.read_n_bits(n - 2)?;
                 }
             }
             hi -= 1;
         }
         let lutd = &mut lut.low_bits_of_distance[if hi == 0 { 1 } else { 0 }];
-        let low_bit = self.read_1_bit(&mut lutd.v, 14, 6);
-        let low_nibble = self.read_nibble(&mut lutd.d[low_bit]);
-        low_bit + (2 * low_nibble) + (32 * hi) + 1
+        let low_bit = self.read_1_bit(&mut lutd.v, 14, 6)?;
+        let low_nibble = self.read_nibble(&mut lutd.d[low_bit])?;
+        Ok(low_bit + (2 * low_nibble) + (32 * hi) + 1)
     }
 
     /// Read a near distance using a near distance model
-    fn read_near_distance(&mut self, lut: &mut LznaState, idx: usize) -> usize {
+    fn read_near_distance(&mut self, lut: &mut LznaState, idx: usize) -> Res<usize> {
         let model = &mut lut.near_dist[idx];
-        let nb = self.read_nibble(&mut model.first);
+        let nb = self.read_nibble(&mut model.first)?;
         let mut hi = 0;
         if nb != 0 {
-            hi = self.read_1_bit(&mut model.second[nb - 1], 14, 6) + 2;
+            hi = self.read_1_bit(&mut model.second[nb - 1], 14, 6)? + 2;
             if nb != 1 {
-                hi = (hi << 1) + self.read_1_bit(&mut model.third[hi - 2][nb - 1], 14, 6);
+                hi = (hi << 1) + self.read_1_bit(&mut model.third[hi - 2][nb - 1], 14, 6)?;
                 if nb != 2 {
-                    hi = (hi << (nb - 2)) + self.read_n_bits(nb - 2);
+                    hi = (hi << (nb - 2)) + self.read_n_bits(nb - 2)?;
                 }
             }
             hi -= 1;
         }
         let lutd = &mut lut.low_bits_of_distance[if hi == 0 { 1 } else { 0 }];
-        let low_bit = self.read_1_bit(&mut lutd.v, 14, 6);
-        let low_nibble = self.read_nibble(&mut lutd.d[low_bit]);
-        low_bit + (2 * low_nibble) + (32 * hi) + 1
+        let low_bit = self.read_1_bit(&mut lutd.v, 14, 6)?;
+        let low_nibble = self.read_nibble(&mut lutd.d[low_bit])?;
+        Ok(low_bit + (2 * low_nibble) + (32 * hi) + 1)
     }
 
     /// Read a length using the length model.
-    fn read_length(&mut self, model: &mut LznaLongLengthModel) -> usize {
-        let mut length = self.read_nibble(&mut model.first[self.dst & 3]);
+    fn read_length(&mut self, model: &mut LznaLongLengthModel) -> Res<usize> {
+        let mut length = self.read_nibble(&mut model.first[self.dst & 3])?;
         if length >= 12 {
-            let mut b = self.read_nibble(&mut model.second);
+            let mut b = self.read_nibble(&mut model.second)?;
             if b >= 15 {
-                b = 15 + self.read_nibble(&mut model.third);
+                b = 15 + self.read_nibble(&mut model.third)?;
             }
             let mut n = 0;
             let mut base = 0;
@@ -387,14 +387,15 @@ impl<'a> Lzna<'a> {
                 n = (b - 1) >> 1;
                 base = ((((b - 1) & 1) + 2) << n) - 1;
             }
-            length += (self.read_n_bits(n) + base) * 4;
+            length += (self.read_n_bits(n)? + base) * 4;
         }
-        length
+        Ok(length)
     }
 
     pub(crate) fn decode_quantum(&mut self, lut: &mut LznaState) -> Res<usize> {
+        let input_len = self.input.len();
         lut.preprocess_match_history();
-        self.init();
+        self.init()?;
         let mut dist = lut.match_history[4] as usize;
 
         let mut state = 5;
@@ -402,25 +403,25 @@ impl<'a> Lzna<'a> {
         let mut x;
 
         if self.dst == 0 {
-            if self.read_bool() {
+            if self.read_bool()? {
                 x = 0;
             } else {
                 let model = &mut lut.literal[0];
-                x = self.read_nibble(&mut model.upper[0]);
+                x = self.read_nibble(&mut model.upper[0])?;
                 x = (x << 4)
                     + self.read_nibble(if x != 0 {
                         &mut model.nomatch[x]
                     } else {
                         &mut model.lower[0]
-                    });
+                    })?;
             }
             self.write(x as u8);
         }
         while self.dst < dst_end {
             let match_val = self.output[self.dst - dist];
 
-            if self.read_1_bit(&mut lut.is_literal[(self.dst & 7) + 8 * state], 13, 5) != 0 {
-                x = self.read_nibble(&mut lut.typ[(self.dst & 7) + 8 * state]);
+            if self.read_1_bit(&mut lut.is_literal[(self.dst & 7) + 8 * state], 13, 5)? != 0 {
+                x = self.read_nibble(&mut lut.typ[(self.dst & 7) + 8 * state])?;
                 if x == 0 {
                     // Copy 1 byte from most recent distance
                     self.write(match_val);
@@ -428,19 +429,22 @@ impl<'a> Lzna<'a> {
                 } else if x < 4 {
                     if x == 1 {
                         // Copy count 3-4
-                        let length =
-                            3 + self.read_1_bit(&mut lut.short_length[state][self.dst & 3], 14, 4);
-                        dist = self.read_near_distance(lut, length - 3);
+                        let length = 3 + self.read_1_bit(
+                            &mut lut.short_length[state][self.dst & 3],
+                            14,
+                            4,
+                        )?;
+                        dist = self.read_near_distance(lut, length - 3)?;
                         self.copy_offset(dist, length);
                     } else if x == 2 {
                         // Copy count 5-12
-                        let length = 5 + self.read_3_bits(&mut lut.medium_length);
-                        dist = self.read_far_distance(lut);
+                        let length = 5 + self.read_3_bits(&mut lut.medium_length)?;
+                        dist = self.read_far_distance(lut)?;
                         self.copy_offset(dist, length);
                     } else {
                         // Copy count 13-
-                        let length = self.read_length(&mut lut.long_length) + 13;
-                        dist = self.read_far_distance(lut);
+                        let length = self.read_length(&mut lut.long_length)? + 13;
+                        dist = self.read_far_distance(lut)?;
                         self.copy_offset(dist, length);
                     }
                     state = if state >= 7 { 10 } else { 7 };
@@ -467,12 +471,12 @@ impl<'a> Lzna<'a> {
                     lut.match_history[4] = dist as u32;
                     if x & 1 == 1 {
                         // Copy 11- bytes from recent distance
-                        let length = 11 + self.read_length(&mut lut.long_length_recent);
+                        let length = 11 + self.read_length(&mut lut.long_length_recent)?;
                         self.copy_offset(dist, length);
                     } else {
                         // Copy 3-10 bytes from recent distance
-                        let length =
-                            3 + self.read_3_bits(&mut lut.short_length_recent[idx].a[self.dst & 3]);
+                        let length = 3 + self
+                            .read_3_bits(&mut lut.short_length_recent[idx].a[self.dst & 3])?;
                         self.copy_offset(dist, length);
                     }
                     state = if state >= 7 { 11 } else { 8 };
@@ -480,15 +484,18 @@ impl<'a> Lzna<'a> {
             } else {
                 // Output a literal
                 let model = &mut lut.literal[self.dst & 3];
-                x = self.read_nibble(&mut model.upper[match_val as usize >> 4]);
+                x = self.read_nibble(&mut model.upper[match_val as usize >> 4])?;
                 x = (x << 4)
                     + self.read_nibble(if (match_val as usize >> 4) != x {
                         &mut model.nomatch[x]
                     } else {
                         &mut model.lower[match_val as usize & 0xF]
-                    });
+                    })?;
                 self.write(x as u8);
-                state = [0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 4, 5][state];
+                state = [0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 4, 5]
+                    .get(state)
+                    .copied()
+                    .unwrap_or_default();
             }
         }
 
@@ -497,6 +504,6 @@ impl<'a> Lzna<'a> {
         self.output[self.dst..][..4].copy_from_slice(&(self.bits_a as i32).to_le_bytes());
         self.output[self.dst + 4..].copy_from_slice(&(self.bits_b as i32).to_le_bytes());
 
-        Ok(self.src)
+        Ok(input_len - self.input.len())
     }
 }

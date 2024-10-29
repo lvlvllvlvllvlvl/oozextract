@@ -59,11 +59,6 @@ pub enum QuantumHeader {
         /// The compressed size of this quantum. If this value is 0 it means
         /// the quantum is a special quantum such as memset.
         compressed_size: usize,
-        // If checksums are enabled, holds the checksum.
-        checksum: u32,
-        // Two flags
-        flag1: bool,
-        flag2: bool,
     },
     WholeMatch {
         // Whether the whole block matched a previous block
@@ -143,8 +138,7 @@ impl Extractor {
         input: &mut In,
         output: &mut [u8],
     ) -> std::io::Result<usize> {
-        self.read_async(&mut crate::extractor::input::Async(input), output)
-            .await
+        self.read_async(&mut input::Async(input), output).await
     }
 
     /// Extracts from an instance of [`futures::stream::Stream<Item = bytes::Bytes>`]
@@ -160,7 +154,7 @@ impl Extractor {
         output: &mut [u8],
     ) -> std::io::Result<usize> {
         self.read_async(
-            &mut crate::extractor::input::ByteStream {
+            &mut input::ByteStream {
                 stream: input,
                 current: None,
             },
@@ -346,16 +340,16 @@ impl Extractor {
         if self.header.block_size() == LARGE_BLOCK {
             let v = usize::from_be_bytes(self.read_bytes(input, 3).await?);
             let size = v & 0x3FFFF;
-            if size != 0x3ffff {
+            if size != 0x3FFFF {
                 Ok(QuantumHeader::Compressed {
                     compressed_size: size + 1,
-                    flag1: ((v >> 18) & 1) == 1,
-                    flag2: ((v >> 19) & 1) == 1,
-                    checksum: if self.header.use_checksums {
-                        u32::from_be_bytes(self.read_bytes(input, 3).await?)
-                    } else {
-                        0
-                    },
+                    // flag1: ((v >> 18) & 1) == 1,
+                    // flag2: ((v >> 19) & 1) == 1,
+                    // checksum: if self.header.use_checksums {
+                    //     u32::from_be_bytes(self.read_bytes(input, 3).await?)
+                    // } else {
+                    //     0
+                    // },
                 })
             } else if (v >> 18) == 1 {
                 let [value] = self.read_bytes(input, 1).await?;
@@ -369,13 +363,13 @@ impl Extractor {
             if size != 0x3FFF {
                 Ok(QuantumHeader::Compressed {
                     compressed_size: usize::from(size + 1),
-                    flag1: (v >> 14) & 1 == 1,
-                    flag2: (v >> 15) & 1 == 1,
-                    checksum: if self.header.use_checksums {
-                        u32::from_be_bytes(self.read_bytes(input, 3).await?)
-                    } else {
-                        0
-                    },
+                    // flag1: (v >> 14) & 1 == 1,
+                    // flag2: (v >> 15) & 1 == 1,
+                    // checksum: if self.header.use_checksums {
+                    //     u32::from_be_bytes(self.read_bytes(input, 3).await?)
+                    // } else {
+                    //     0
+                    // },
                 })
             } else {
                 match v >> 14 {

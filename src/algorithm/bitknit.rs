@@ -400,7 +400,10 @@ impl<'a> Bitknit<'a> {
                 self.copy_chunks::<4>(copy_length, match_dist as usize)
                     .at(self)?;
             } else {
+                #[allow(clippy::indexing_slicing)]
                 for i in 0..copy_length {
+                    self.assert_le(self.dst + i, self.output.len())?;
+                    self.assert_le(match_dist as usize, self.dst + i)?;
                     self.output[self.dst + i] = self.output[self.dst + i - match_dist as usize];
                 }
             }

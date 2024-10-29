@@ -1,5 +1,5 @@
 use bytes::Buf;
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{black_box, criterion_group, BenchmarkId, Criterion};
 use oozextract::Extractor;
 use std::fs;
 use std::fs::File;

@@ -1,4 +1,3 @@
-//#![feature(portable_simd, array_chunks)]
 #![allow(clippy::too_many_arguments)]
 #![warn(
     clippy::indexing_slicing,
