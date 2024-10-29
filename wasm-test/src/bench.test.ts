@@ -1,4 +1,4 @@
-import {Extractor} from "../../pkg/inline/oozextract.js";
+import {Extractor} from "oozextract";
 import {decompressUnsafe} from "ooz-wasm";
 import {readdirSync, readFileSync} from "node:fs";
 import path from "node:path";

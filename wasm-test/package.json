@@ -13,6 +13,7 @@
   "devDependencies": {
     "@types/node": "^22.8.1",
     "ooz-wasm": "^2.0.0",
+    "oozextract": "file:../pkg",
     "typescript": "~5.6.2",
     "vitest": "^2.1.3"
   }
