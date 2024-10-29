@@ -17,7 +17,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
         with:
-          cache: 'npm'
+          cache: npm
+          cache-dependency-path: wasm-test/package-lock.json
       - name: Build
         run: |
           cargo install cargo-all-features wasm-pack
