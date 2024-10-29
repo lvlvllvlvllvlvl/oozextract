@@ -4,10 +4,10 @@ use crate::algorithm::Mermaid;
 use crate::algorithm::{Algorithm, Leviathan};
 use crate::algorithm::{Bitknit, BitknitState, Kraken};
 use crate::algorithm::{Lzna, LznaState};
-use crate::core::error::End::{Idx, Len};
-use crate::core::error::{ErrorContext, Res, ResultBuilder, WithContext};
-use crate::core::Core;
-use crate::extractor::input::{Input, Slice};
+use crate::decoder::error::End::{Idx, Len};
+use crate::decoder::error::{ErrorContext, Res, ResultBuilder, WithContext};
+use crate::decoder::Core;
+use crate::ooz::input::{Input, Slice};
 use futures::FutureExt;
 use std::io::Read;
 #[cfg(feature = "tokio")]
@@ -70,6 +70,16 @@ pub enum QuantumHeader {
     Uncompressed,
 }
 
+/// Decompresses Oodle data to a buffer. Methods are provided for various input types, depending on
+/// crate features.
+/// 
+/// Example: decompress data from a file (output length stored separately).
+/// ```
+/// # use std::fs::File;
+/// # use oozextract::Extractor;
+/// # let uncompressed_size = 1;
+/// Extractor::new().read(&mut File::open("compressed")?, &mut vec![0; uncompressed_size])?;
+/// ```
 #[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct Extractor {
     pos: usize,

@@ -1,5 +1,5 @@
-use crate::core::error::{ErrorBuilder, ErrorContext, Res, ResultBuilder};
-use crate::core::Core;
+use crate::decoder::error::{ErrorBuilder, ErrorContext, Res, ResultBuilder};
+use crate::decoder::Core;
 use std::fmt::{Display, Formatter};
 use std::mem::size_of;
 use wide::{u64x2, u8x16};

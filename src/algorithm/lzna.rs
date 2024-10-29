@@ -1,4 +1,4 @@
-use crate::core::error::{ErrorContext, Res};
+use crate::decoder::error::{ErrorContext, Res};
 use bytes::Buf;
 use std::array;
 use wide::{i16x16, i16x8, CmpGt};

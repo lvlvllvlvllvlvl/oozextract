@@ -4,9 +4,9 @@ mod leviathan;
 mod lzna;
 mod mermaid;
 
-use crate::core::error::Res;
-use crate::core::pointer::{Pointer, PointerDest};
-use crate::core::Core;
+use crate::decoder::error::Res;
+use crate::decoder::pointer::{Pointer, PointerDest};
+use crate::decoder::Core;
 use std::fmt::Debug;
 
 pub(crate) use bitknit::*;

@@ -1,7 +1,7 @@
 use crate::algorithm::Algorithm;
-use crate::core::error::{ErrorContext, Res, ResultBuilder, SliceErrors, WithContext};
-use crate::core::pointer::{Pointer, PointerDest};
-use crate::core::{pointer, Core};
+use crate::decoder::error::{ErrorContext, Res, ResultBuilder, SliceErrors, WithContext};
+use crate::decoder::pointer::{Pointer, PointerDest};
+use crate::decoder::{pointer, Core};
 
 #[derive(Default)]
 pub struct LeviathanLzTable {

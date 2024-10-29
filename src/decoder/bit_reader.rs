@@ -1,6 +1,6 @@
-use crate::core::error::{ErrorContext, Res, WithContext};
-use crate::core::pointer::Pointer;
-use crate::core::Core;
+use crate::decoder::error::{ErrorContext, Res, WithContext};
+use crate::decoder::pointer::Pointer;
+use crate::decoder::Core;
 
 pub struct BitReader<const SRC: u8> {
     /// |p| holds the current u8 and |p_end| the end of the buffer.

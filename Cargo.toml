@@ -26,12 +26,16 @@ criterion = "0.5.1"
 tokio = { version = "1.41.0", features = ["full"] }
 tokio-util = { version = "0.7.12", features = ["io"] }
 
-[package.metadata.wasm-pack.profile.dev]
-wasm-opt = false
-[package.metadata.wasm-pack.profile.profiling]
-wasm-opt = ['-O4', '-g']
-[package.metadata.wasm-pack.profile.release]
-wasm-opt = ['-O4']
+[package.metadata.docs.rs]
+all-features = true
+# use this cfg value to enable nightly-only features such as `doc_auto_cfg`
+# when built by docs.rs https://stackoverflow.com/a/61417700/2063518
+rustdoc-args = ["--cfg", "nightly"]
+
+[package.metadata.wasm-pack.profile]
+dev.wasm-opt = false
+profiling.wasm-opt = ['-O4', '-g']
+release.wasm-opt = ['-O4']
 
 [[bench]]
 name = "criterion"

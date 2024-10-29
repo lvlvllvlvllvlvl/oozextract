@@ -1,3 +1,4 @@
+#![cfg_attr(nightly, feature(doc_auto_cfg))]
 #![allow(clippy::too_many_arguments)]
 #![warn(
     clippy::indexing_slicing,
@@ -6,17 +7,17 @@
     clippy::missing_asserts_for_indexing
 )]
 mod algorithm;
-mod core;
-mod extractor;
+mod decoder;
+mod ooz;
 
-pub use crate::extractor::Extractor;
+pub use crate::ooz::Extractor;
 
 #[cfg(feature = "x86_sse")]
-pub use crate::core::huffman::{reverse_naive, reverse_portable, reverse_x86};
+pub use crate::decoder::huffman::{reverse_naive, reverse_portable, reverse_x86};
 
 #[cfg(test)]
 mod tests {
-    use crate::extractor::Extractor;
+    use crate::ooz::Extractor;
     use bytes::Buf;
     use std::fs::File;
     #[cfg(feature = "async")]
