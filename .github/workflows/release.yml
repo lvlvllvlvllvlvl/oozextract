@@ -36,9 +36,7 @@ jobs:
           cargo release ${{ github.event.inputs.level }} --execute --no-confirm
           wasm-pack build --target web --features wasm
           npx -y wasm-pack-inline pkg --dir pkg
-      - run: |
-          npm ci
-          npm publish --provenance
+      - run: npm publish --provenance
         working-directory: pkg
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
