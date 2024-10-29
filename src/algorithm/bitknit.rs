@@ -1,4 +1,4 @@
-use crate::decoder::error::{
+use crate::ooz::error::{
     End, ErrorBuilder, ErrorContext, Res, ResultBuilder, SliceErrors, WithContext,
 };
 use End::Len;

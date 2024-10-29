@@ -15,7 +15,6 @@ pub struct OozError;
 
 pub type Res<T> = Result<T, OozError>;
 
-#[cfg(feature = "verbose_errors")]
 impl Error for OozError {
     #[cfg(feature = "verbose_errors")]
     fn source(&self) -> Option<&(dyn Error + 'static)> {
@@ -26,8 +25,8 @@ impl Error for OozError {
     }
 }
 
-#[cfg(feature = "verbose_errors")]
 impl Display for OozError {
+    #[cfg(feature = "verbose_errors")]
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(cause) = &self.source {
             Display::fmt(cause, f)?
@@ -40,6 +39,11 @@ impl Display for OozError {
             writeln!(f, "  ({})", context)?
         }
         Ok(())
+    }
+
+    #[cfg(not(feature = "verbose_errors"))]
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OozError")
     }
 }
 
@@ -203,13 +207,6 @@ impl<T, E: Error + 'static + Send + Sync, C: ErrorContext> WithContext<T, E, C> 
             source: Some(Box::new(_e)),
             ..Default::default()
         })
-    }
-}
-
-#[cfg(not(feature = "verbose_errors"))]
-impl<T, C: ErrorContext> WithContext<T, OozError, C> for Result<T, OozError> {
-    fn at(self, _context: &C) -> Result<T, ErrorBuilder> {
-        self.map_err(|_e| Default::default())
     }
 }
 

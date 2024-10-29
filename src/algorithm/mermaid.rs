@@ -1,7 +1,7 @@
 use crate::algorithm::Algorithm;
-use crate::decoder::error::{ErrorContext, Res, ResultBuilder, WithContext};
 use crate::decoder::pointer::{Pointer, PointerDest};
 use crate::decoder::{pointer, Core};
+use crate::ooz::error::{ErrorContext, Res, ResultBuilder, WithContext};
 use std::collections::VecDeque;
 
 #[derive(Debug)]

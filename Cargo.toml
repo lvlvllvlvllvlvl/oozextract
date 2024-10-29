@@ -10,6 +10,10 @@ exclude = ["testdata", "verify"]
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "unoodle"
+path = "src/main.rs"
+
 [dependencies]
 bytemuck = "1.19.0"
 bytes = "1.8.0"

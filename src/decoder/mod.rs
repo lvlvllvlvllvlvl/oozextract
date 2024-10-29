@@ -1,13 +1,12 @@
 pub(crate) mod bit_reader;
-pub(crate) mod error;
 pub(crate) mod huffman;
 pub(crate) mod pointer;
 pub(crate) mod tans;
 
 use crate::algorithm::Algorithm;
+use crate::ooz::error::End::Idx;
+use crate::ooz::error::{ErrorContext, Res, ResultBuilder, WithContext};
 use bit_reader::{BitReader, BitReader2};
-use error::End::Idx;
-use error::{ErrorContext, Res, ResultBuilder, WithContext};
 use huffman::{HuffRange, HuffReader, BASE_PREFIX};
 use pointer::{Pointer, PointerDest};
 use tans::TansDecoder;

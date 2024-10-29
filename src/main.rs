@@ -11,8 +11,7 @@ fn main() {
 mod cli {
     use bytes::Buf;
     use clap::Parser;
-    use oozextract::Extractor;
-    use std::error::Error;
+    use oozextract::{Extractor, OozError};
     use std::fs::File;
     use std::io::{Read, Write};
     use std::path::PathBuf;
@@ -62,7 +61,7 @@ mod cli {
             stdout,
             verbose,
         }: Args,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), OozError> {
         let mut input = if let Some(len) = length {
             Vec::with_capacity(len)
         } else {
@@ -131,7 +130,7 @@ mod cli {
         }
 
         if stdout {
-            println!("{}", std::str::from_utf8(&extracted)?);
+            println!("{}", std::str::from_utf8(&extracted).unwrap());
         }
         Ok(())
     }

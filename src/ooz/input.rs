@@ -1,4 +1,4 @@
-use crate::decoder::error::{Res, ResultBuilder};
+use crate::ooz::error::{Res, ResultBuilder};
 #[cfg(feature = "async")]
 use futures::{Stream, StreamExt};
 use std::io::Read;
@@ -92,7 +92,7 @@ impl<
     > Input<bytes::Bytes> for ByteStream<E, S>
 {
     async fn read_to(&mut self, mut out: &mut [u8]) -> Res<()> {
-        use crate::decoder::error::ErrorBuilder;
+        use crate::ooz::error::ErrorBuilder;
         if self.current.is_none() {
             self.current = ErrorBuilder::invert(self.stream.next().await)?
         }
@@ -119,7 +119,7 @@ impl<
     }
 
     async fn read_slice(&mut self, buf: &mut bytes::BytesMut, len: usize) -> Res<bytes::Bytes> {
-        use crate::decoder::error::ErrorBuilder;
+        use crate::ooz::error::ErrorBuilder;
         if self.current.is_none() {
             self.current = ErrorBuilder::invert(self.stream.next().await)?;
         }

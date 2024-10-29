@@ -1,7 +1,7 @@
 use crate::decoder::bit_reader::{BitReader, BitReader2};
-use crate::decoder::error::{ErrorContext, Res, WithContext};
 use crate::decoder::pointer::Pointer;
 use crate::decoder::Core;
+use crate::ooz::error::{ErrorContext, Res, WithContext};
 
 #[derive(Default)]
 pub struct TansDecoder<const SRC: u8, const DST: u8> {

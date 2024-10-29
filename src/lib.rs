@@ -10,6 +10,7 @@ mod algorithm;
 mod decoder;
 mod ooz;
 
+pub use crate::ooz::error::OozError;
 pub use crate::ooz::Extractor;
 
 #[cfg(feature = "x86_sse")]
@@ -18,6 +19,7 @@ pub use crate::decoder::huffman::{reverse_naive, reverse_portable, reverse_x86};
 #[cfg(test)]
 mod tests {
     use crate::ooz::Extractor;
+    use crate::OozError;
     use bytes::Buf;
     use std::fs::File;
     #[cfg(feature = "async")]
@@ -136,11 +138,7 @@ mod tests {
 
     #[allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
     fn loop_files(
-        mut extract: impl FnMut(
-            &mut Extractor,
-            &mut File,
-            &mut Vec<u8>,
-        ) -> Result<(), Box<dyn std::error::Error>>,
+        mut extract: impl FnMut(&mut Extractor, &mut File, &mut Vec<u8>) -> Result<(), OozError>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         d.push("testdata");
@@ -189,7 +187,7 @@ mod tests {
         Fun: Send + Sync + Fn(tokio::fs::File) -> Fut,
     >(
         extract: &'static Fun,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), OozError> {
         let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         d.push("testdata");
         let mut tasks = JoinSet::new();

@@ -1,7 +1,7 @@
-use crate::decoder::error::End::Len;
-use crate::decoder::error::{ErrorContext, Res, ResultBuilder, SliceErrors, WithContext};
 use crate::decoder::pointer::Pointer;
 use crate::decoder::Core;
+use crate::ooz::error::End::Len;
+use crate::ooz::error::{ErrorContext, Res, ResultBuilder, SliceErrors, WithContext};
 use wide::{u64x2, u8x16};
 
 pub const BASE_PREFIX: [usize; 12] = [

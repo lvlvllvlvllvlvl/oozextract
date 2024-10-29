@@ -1,12 +1,13 @@
-mod input;
+pub(crate) mod error;
+pub(crate) mod input;
 
 use crate::algorithm::Mermaid;
 use crate::algorithm::{Algorithm, Leviathan};
 use crate::algorithm::{Bitknit, BitknitState, Kraken};
 use crate::algorithm::{Lzna, LznaState};
-use crate::decoder::error::End::{Idx, Len};
-use crate::decoder::error::{ErrorContext, Res, ResultBuilder, WithContext};
 use crate::decoder::Core;
+use crate::ooz::error::End::{Idx, Len};
+use crate::ooz::error::{ErrorContext, OozError, Res, ResultBuilder, WithContext};
 use crate::ooz::input::{Input, Slice};
 use futures::FutureExt;
 use std::io::Read;
@@ -118,14 +119,14 @@ impl Extractor {
     /// Input is assumed to be buffered; wrapping unbuffered input with [`std::io::BufReader`] may improve performance
     ///
     /// `output` should be exactly large enough to hold the uncompressed data
-    pub fn read<In: Read>(&mut self, input: &mut In, output: &mut [u8]) -> std::io::Result<usize> {
+    pub fn read<In: Read>(&mut self, input: &mut In, output: &mut [u8]) -> Result<usize, OozError> {
         self.read_sync(input, output)
     }
 
     /// Extracts from a byte slice
     ///
     /// `output` should be exactly large enough to hold the uncompressed data
-    pub fn read_from_slice(&mut self, input: &[u8], output: &mut [u8]) -> std::io::Result<usize> {
+    pub fn read_from_slice(&mut self, input: &[u8], output: &mut [u8]) -> Result<usize, OozError> {
         self.read_sync(&mut Slice { buf: input, pos: 0 }, output)
     }
 
@@ -139,7 +140,7 @@ impl Extractor {
         &mut self,
         input: &mut In,
         output: &mut [u8],
-    ) -> std::io::Result<usize> {
+    ) -> Result<usize, OozError> {
         self.read_async(&mut input::Async(input), output).await
     }
 
@@ -154,7 +155,7 @@ impl Extractor {
         &mut self,
         input: &mut In,
         output: &mut [u8],
-    ) -> std::io::Result<usize> {
+    ) -> Result<usize, OozError> {
         self.read_async(
             &mut input::ByteStream {
                 stream: input,
@@ -171,7 +172,7 @@ impl Extractor {
         &mut self,
         input: &mut In,
         output: &mut [u8],
-    ) -> std::io::Result<usize> {
+    ) -> Result<usize, OozError> {
         log::debug!("reading to buf with size {}", output.len());
         let mut bytes_written = 0;
         while bytes_written < output.len() {
@@ -201,7 +202,7 @@ impl Extractor {
         &mut self,
         input: &mut In,
         output: &mut [u8],
-    ) -> std::io::Result<usize> {
+    ) -> Result<usize, OozError> {
         log::debug!("reading to buf with size {}", output.len());
         let mut bytes_written = 0;
         while bytes_written < output.len() {
