@@ -2,7 +2,6 @@ use std::error::Error;
 use std::fmt::{Debug, Display};
 
 #[cfg(feature = "verbose_errors")]
-#[derive(Debug)]
 pub struct OozError {
     pub message: Option<String>,
     pub context: Option<String>,
@@ -34,13 +33,20 @@ impl Display for OozError {
             Display::fmt(cause, f)?
         }
         if let Some(message) = &self.message {
-            f.write_str(message)?;
+            writeln!(f, "{}", message)?;
         }
+        writeln!(f, "at {}", self.location)?;
         if let Some(context) = &self.context {
-            write!(f, "\n({})", context)?
+            writeln!(f, "  ({})", context)?
         }
-        write!(f, "\nat {}", self.location)?;
         Ok(())
+    }
+}
+
+#[cfg(feature = "verbose_errors")]
+impl Debug for OozError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, r#"OozError("{}")"#, self)
     }
 }
 

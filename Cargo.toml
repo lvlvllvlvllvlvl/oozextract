@@ -13,6 +13,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 bytemuck = "1.19.0"
 bytes = "1.8.0"
+clap = { version = "4.5.20", optional = true, features = ["derive"] }
 futures = "0.3.31"
 log = "0.4.22"
 test-log = "0.2.16"
@@ -42,3 +43,4 @@ async = []
 tokio = ["async", "dep:tokio"]
 wasm = ["dep:wasm-bindgen"]
 verbose_errors = []
+cli = ["dep:clap"]
