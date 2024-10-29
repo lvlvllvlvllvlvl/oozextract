@@ -70,16 +70,8 @@ pub enum QuantumHeader {
     Uncompressed,
 }
 
-/// Decompresses Oodle data to a buffer. Methods are provided for various input types, depending on
-/// crate features.
-/// 
-/// Example: decompress data from a file (output length stored separately).
-/// ```
-/// # use std::fs::File;
-/// # use oozextract::Extractor;
-/// # let uncompressed_size = 1;
-/// Extractor::new().read(&mut File::open("compressed")?, &mut vec![0; uncompressed_size])?;
-/// ```
+/// Decompresses Oodle data to a buffer. Methods are provided for various input types,
+/// depending on crate features.
 #[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct Extractor {
     pos: usize,
