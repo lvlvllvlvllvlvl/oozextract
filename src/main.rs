@@ -15,7 +15,6 @@ mod cli {
     use std::error::Error;
     use std::fs::File;
     use std::io::{Read, Write};
-    use std::os::windows::fs::MetadataExt;
     use std::path::PathBuf;
 
     #[derive(Parser)]
@@ -120,7 +119,7 @@ mod cli {
                 }
             }
             let mut verify = File::open(verify)?;
-            assert_eq!(verify.metadata()?.file_size() as usize, extracted.len());
+            assert_eq!(verify.metadata()?.len() as usize, extracted.len());
             let mut expect = Vec::with_capacity(extracted.len());
             verify.read_to_end(&mut expect)?;
             for (i, (actual, expected)) in extracted.iter().zip(expect.iter()).enumerate() {
