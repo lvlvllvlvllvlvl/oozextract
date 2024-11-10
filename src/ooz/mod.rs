@@ -144,26 +144,26 @@ impl Extractor {
         self.read_async(&mut input::Async(input), output).await
     }
 
-    /// Extracts from an instance of [`futures::stream::Stream<Item = bytes::Bytes>`]
+    /// Extracts from an instance of [`futures::stream::Stream`]
+    ///
+    /// Bytes in `current` will be prepended to the stream; the Option<Bytes> returned by this method
+    /// should be passed in to the next `read_from_stream` call when extracting multiple compressed
+    /// blocks from a stream.
     ///
     /// `output` should be exactly large enough to hold the uncompressed data
     #[cfg(feature = "async")]
-    pub async fn async_stream<
+    pub async fn read_from_stream<
         E: 'static + std::error::Error + Send + Sync,
         In: futures::Stream<Item = Result<bytes::Bytes, E>> + Unpin,
     >(
         &mut self,
-        input: &mut In,
+        stream: &mut In,
+        current: Option<bytes::Bytes>,
         output: &mut [u8],
-    ) -> Result<usize, OozError> {
-        self.read_async(
-            &mut input::ByteStream {
-                stream: input,
-                current: None,
-            },
-            output,
-        )
-        .await
+    ) -> Result<(usize, Option<bytes::Bytes>), OozError> {
+        let mut input = input::ByteStream { stream, current };
+        let n = self.read_async(&mut input, output).await?;
+        Ok((n, input.current))
     }
 }
 

@@ -1,3 +1,10 @@
+//!
+//! Extracts data compressed in the Kraken, Mermaid, Selkie, Leviathan, LZNA, or Bitknit formats.
+//!
+//! ## Features:
+//! - `async`: Enables the [`Extractor::read_from_stream`] method, for runtime-agnostic extraction from bytes streams such as the one returned by `reqwest::Response::bytes_stream`.
+//! - `tokio`: Enables extraction from [`tokio::io::AsyncRead`].
+//! - `cli`: Builds the `unoodle` command-line executable.
 #![cfg_attr(nightly, feature(doc_auto_cfg))]
 #![allow(clippy::too_many_arguments)]
 #![warn(
@@ -131,7 +138,7 @@ mod tests {
         let len = u64::from_le_bytes(buf) as usize;
         let mut output = bytes::BytesMut::zeroed(len);
         Extractor::new()
-            .async_stream(&mut ReaderStream::new(file), &mut output)
+            .read_from_stream(&mut ReaderStream::new(file), None, &mut output)
             .await?;
         Ok(output)
     }
