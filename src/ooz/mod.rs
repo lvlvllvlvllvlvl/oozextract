@@ -230,7 +230,7 @@ impl Extractor {
         let dst_bytes_left = std::cmp::min(output.len() - offset, self.header.block_size());
 
         if self.header.uncompressed {
-            let out = self.slice_mut(output, offset, Idx(dst_bytes_left))?;
+            let out = self.slice_mut(output, offset, Len(dst_bytes_left))?;
             input.read_to(out).await.at(self)?;
             self.pos += dst_bytes_left;
             return Ok(out.len());
