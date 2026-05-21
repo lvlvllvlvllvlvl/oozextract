@@ -24,11 +24,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v4
+        id: rust-cache
+      - uses: actions/setup-node@v6
         with:
-          cache: npm
-          cache-dependency-path: wasm-test/package-lock.json
-          registry-url: https://registry.npmjs.org
+          node-version: 26
       - run: cargo install cargo-release wasm-pack
         if: steps.rust-cache.outputs.cache-hit != 'true'
       - run: |
