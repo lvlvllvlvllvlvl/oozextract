@@ -68,6 +68,28 @@ mod tests {
 
     #[test_log::test]
     #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+    fn uncompressed_block_at_nonzero_offset() {
+        const BLOCK: usize = 0x40000;
+        const HDR: [u8; 2] = [0x4C, 0x06];
+
+        let mut input = Vec::with_capacity(2 * (HDR.len() + BLOCK));
+        input.extend_from_slice(&HDR);
+        input.extend(std::iter::repeat(0xAB).take(BLOCK));
+        input.extend_from_slice(&HDR);
+        input.extend(std::iter::repeat(0xCD).take(BLOCK));
+
+        let mut output = vec![0u8; 2 * BLOCK];
+        let n = Extractor::new()
+            .read_from_slice(&input, &mut output)
+            .unwrap();
+
+        assert_eq!(n, 2 * BLOCK);
+        assert!(output[..BLOCK].iter().all(|&b| b == 0xAB));
+        assert!(output[BLOCK..].iter().all(|&b| b == 0xCD));
+    }
+
+    #[test_log::test]
+    #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
     fn read_from_slice() {
         loop_files(|extractor, file, output| {
             let mut buf = Vec::new();
