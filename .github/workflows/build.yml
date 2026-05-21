@@ -25,7 +25,7 @@ jobs:
           wasm-pack build --profiling --target web --features wasm
           npx -y wasm-pack-inline pkg --dir pkg
       - name: Cargo tests
-        run: cargo test-all-features --release
+        run: cargo all-features test --release
       - name: Benchmark wasm
         working-directory: wasm-test
         run: |
