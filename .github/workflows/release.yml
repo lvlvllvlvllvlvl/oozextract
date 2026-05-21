@@ -23,13 +23,10 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-        id: rust-cache
       - uses: actions/setup-node@v6
         with:
           node-version: 26
       - run: cargo install cargo-release wasm-pack
-        if: steps.rust-cache.outputs.cache-hit != 'true'
       - run: |
           git config user.name "GitHub Release Action"
           git config user.email "119665497+lvlvllvlvllvlvl@users.noreply.github.com"
