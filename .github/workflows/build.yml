@@ -13,25 +13,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v4
-        with:
-          cache: npm
-          cache-dependency-path: wasm-test/package-lock.json
-      - name: Build
-        run: |
-          cargo install cargo-all-features wasm-pack
-          wasm-pack build --profiling --target web --features wasm
-          npx -y wasm-pack-inline pkg --dir pkg
-      - name: Cargo tests
-        run: cargo all-features test --release
-      - name: Benchmark wasm
-        working-directory: wasm-test
-        run: |
-          npm install
-          npm run bench
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wasm-bench
-          path: wasm-test/test-runner-profile
+      - run: cargo install cargo-all-features
+      - run: cargo all-features test --release
