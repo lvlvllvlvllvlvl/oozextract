@@ -23,16 +23,9 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 26
-      - run: cargo install cargo-release wasm-pack
+      - run: cargo install cargo-release
       - run: |
           git config user.name "GitHub Release Action"
           git config user.email "119665497+lvlvllvlvllvlvl@users.noreply.github.com"
           cargo login ${{ secrets.CRATES_IO_API_TOKEN }}
           cargo release ${{ github.event.inputs.level }} --execute --no-confirm
-          wasm-pack build --target web --features wasm
-          npx -y wasm-pack-inline pkg --dir pkg
-      - run: npm publish --provenance
-        working-directory: pkg
