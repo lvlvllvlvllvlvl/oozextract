@@ -1014,10 +1014,13 @@ impl Core<'_> {
         ];
 
         for i in 0..num_lens / 2 {
-            bits_f |= self
-                .get_be_bytes(f, 4.min(self.input.len() - f.index))
-                .at(self)? as u32
-                >> (24 - bitpos_f);
+            // ooz reads an unaligned 32-bit word here, which may run past the
+            // end of the varbits region; the surplus bits are always masked off
+            // again, so their value does not matter but their *position* does.
+            // Clamping the read length and right-aligning the short result would
+            // shift the whole word down by 8 bits per missing byte, so pad on the
+            // right instead.
+            bits_f |= u32::from_be_bytes(self.get_arr(f).at(self)?) >> (24 - bitpos_f);
             f += (bitpos_f + 7) >> 3;
 
             bits_b |= self.get_le_bytes(b - 4, 4).at(self)? as u32 >> (24 - bitpos_b);
@@ -1044,10 +1047,13 @@ impl Core<'_> {
 
         // read final one since above loop reads 2
         if (num_lens & 1) == 1 {
-            bits_f |= self
-                .get_be_bytes(f, 4.min(self.input.len() - f.index))
-                .at(self)? as u32
-                >> (24 - bitpos_f);
+            // ooz reads an unaligned 32-bit word here, which may run past the
+            // end of the varbits region; the surplus bits are always masked off
+            // again, so their value does not matter but their *position* does.
+            // Clamping the read length and right-aligning the short result would
+            // shift the whole word down by 8 bits per missing byte, so pad on the
+            // right instead.
+            bits_f |= u32::from_be_bytes(self.get_arr(f).at(self)?) >> (24 - bitpos_f);
             let numbits_f = self.get_byte(interval_lenlog2 + num_lens - 1)?;
             bits_f = (bits_f | 1).rotate_left(numbits_f as _);
             let value_f = bits_f & BITMASKS[numbits_f as usize];

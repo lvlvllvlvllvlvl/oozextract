@@ -58,7 +58,11 @@ impl<const SRC: u8, const DST: u8> TansDecoder<SRC, DST> {
     }
 
     fn tans_forward_bits(&mut self, core: &mut Core) -> Res<()> {
-        self.bits_f |= core.get_le_bytes(self.ptr_f, 4).at(core)? << self.bitpos_f;
+        // Same unaligned 32-bit over-read as the varbits reader in
+        // `decode_multi_array`: the bits past the end of the compressed region
+        // are never consumed, so pad the tail with zeroes rather than failing.
+        self.bits_f |= (u32::from_le_bytes(core.get_arr(self.ptr_f).at(core)?) as usize)
+            << self.bitpos_f;
         self.ptr_f += (31 - self.bitpos_f) >> 3;
         self.bitpos_f |= 24;
         Ok(())

@@ -229,8 +229,9 @@ impl Core<'_> {
             PointerDest::Scratch => self.scratch,
             PointerDest::Temp => self.tmp,
         };
-        let len = LEN.min(src.len() - p.index);
-        let slice = &src[p.index..p.index + len];
+        let len = LEN.min(src.len().saturating_sub(p.index));
+        let start = p.index.min(src.len());
+        let slice = &src[start..start + len];
         if len == LEN {
             Ok(slice.try_into().expect("len == LEN"))
         } else {
