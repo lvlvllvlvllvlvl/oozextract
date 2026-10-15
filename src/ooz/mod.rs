@@ -76,6 +76,7 @@ pub enum QuantumHeader {
 #[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct Extractor {
     pos: usize,
+    output_base: usize,
     header: BlockHeader,
     bitknit_state: Option<BitknitState>,
     lzna_state: Option<LznaState>,
@@ -103,6 +104,7 @@ impl Extractor {
     pub fn new() -> Extractor {
         Extractor {
             pos: 0,
+            output_base: 0,
             header: Default::default(),
             bitknit_state: None,
             lzna_state: None,
@@ -227,6 +229,9 @@ impl Extractor {
         output: &mut [u8],
         offset: usize,
     ) -> Res<usize> {
+        if offset == 0 || self.header.restart_decoder {
+            self.output_base = offset;
+        }
         let dst_bytes_left = std::cmp::min(output.len() - offset, self.header.block_size());
 
         if self.header.uncompressed {
@@ -442,12 +447,14 @@ impl Extractor {
         dst_bytes_left: usize,
         algorithm: T,
     ) -> Res<usize> {
+        // Offsets and initial literals are relative to the latest decoder restart.
+        let output = self.slice_mut(output, self.output_base, Idx(output.len()))?;
         Core::new(
             input,
             output,
             self.scratch.as_mut(),
             self.tmp.as_mut(),
-            offset,
+            offset - self.output_base,
             dst_bytes_left,
         )
         .decode_quantum(algorithm)
