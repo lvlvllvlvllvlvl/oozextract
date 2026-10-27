@@ -358,9 +358,9 @@ impl Core<'_> {
         src = bits.p - ((24 - bits.bitpos) / 8);
 
         if num_syms == 1 {
-            // no test coverage
+            // A single symbol fills the output and the code lengths are the whole chunk: it used its declared size.
             self.memset(output, syms[0], output_size).at(self)?;
-            return Ok(src - src_end);
+            return Ok(src_size);
         }
 
         let rev_lut = self.make_lut(&code_prefix, &syms).at(self)?;
