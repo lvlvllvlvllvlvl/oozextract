@@ -3,7 +3,7 @@ pub(crate) mod input;
 
 use crate::algorithm::Mermaid;
 use crate::algorithm::{Algorithm, Leviathan};
-use crate::algorithm::{Bitknit, BitknitState, Kraken};
+use crate::algorithm::{Bitknit, BitknitState, Kraken, Lzb16};
 use crate::algorithm::{Lzna, LznaState};
 use crate::decoder::Core;
 use crate::ooz::error::End::{Idx, Len};
@@ -16,6 +16,7 @@ use tokio::io::AsyncRead;
 
 #[derive(Debug, Default)]
 pub enum DecoderType {
+    Lzb16 = 0x2,
     #[default]
     Lzna = 0x5,
     Kraken = 0x6,
@@ -47,6 +48,7 @@ impl BlockHeader {
     fn block_size(&self) -> usize {
         match self.decoder_type {
             DecoderType::Lzna => SMALL_BLOCK,
+            DecoderType::Lzb16 => SMALL_BLOCK,
             DecoderType::Bitknit => SMALL_BLOCK,
             _ => LARGE_BLOCK,
         }
@@ -275,6 +277,12 @@ impl Extractor {
                         let mut bitknit = Bitknit::new(input, out, state, offset);
                         bitknit.decode()
                     }
+                    DecoderType::Lzb16 => {
+                        // no state: the restart only sets where its history starts, for the first block
+                        self.header.restart_decoder = false;
+                        let out = self.slice_mut(output, 0, Idx(offset + dst_bytes_left))?;
+                        Lzb16::new(input, out, offset, self.output_base).decode()
+                    }
                     DecoderType::Lzna => {
                         if self.header.restart_decoder {
                             self.lzna_state = Some(LznaState::new());
@@ -397,6 +405,7 @@ impl Extractor {
 
     fn decoder_type(&mut self, value: u8) -> Res<DecoderType> {
         match value {
+            0x2 => Ok(DecoderType::Lzb16),
             0x5 => Ok(DecoderType::Lzna),
             0x6 => Ok(DecoderType::Kraken),
             0xA => Ok(DecoderType::Mermaid),

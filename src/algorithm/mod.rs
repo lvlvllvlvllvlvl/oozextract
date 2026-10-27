@@ -1,6 +1,7 @@
 mod bitknit;
 mod kraken;
 mod leviathan;
+mod lzb16;
 mod lzna;
 mod mermaid;
 
@@ -12,6 +13,7 @@ use std::fmt::Debug;
 pub(crate) use bitknit::*;
 pub(crate) use kraken::Kraken;
 pub(crate) use leviathan::Leviathan;
+pub(crate) use lzb16::Lzb16;
 pub(crate) use lzna::*;
 pub(crate) use mermaid::Mermaid;
 

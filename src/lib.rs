@@ -88,6 +88,86 @@ mod tests {
         assert!(output[BLOCK..].iter().all(|&b| b == 0xCD));
     }
 
+    /// One LZB16 block (decoder type 2): block header `8C 02`, the two-byte quantum header, then the commands.
+    fn lzb16_block(commands: &[u8]) -> Vec<u8> {
+        let size = commands.len() - 1;
+        let mut block = vec![0x8C, 0x02, (size >> 8) as u8, size as u8];
+        block.extend_from_slice(commands);
+        block
+    }
+
+    /// The commands the LZB16 description in `algorithm/lzb16.rs` allows, each form once: the output is checked
+    /// against bytes worked out by hand.
+    #[test_log::test]
+    #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+    fn lzb16_commands() {
+        let mut expected = Vec::new();
+        let mut commands = Vec::new();
+        // 3 literals, then a match of code 1 (length 5) at distance 2 (two bytes)
+        commands.extend_from_slice(&[0x13, b'a', b'b', b'c', 0x02, 0x00]);
+        expected.extend_from_slice(b"abc");
+        for _ in 0..5 {
+            let n = expected.len();
+            expected.push(expected[n - 2]);
+        }
+        // no literals, short form (1 LLLL DDD): length 6 at distance 1 (0xF0 | 0 literals, e = 0x80 | 2 << 3 | 1)
+        commands.extend_from_slice(&[0xF0, 0x91]);
+        for _ in 0..6 {
+            let n = expected.len();
+            expected.push(expected[n - 1]);
+        }
+        // 15 + 2 literals (extension 2), no match code yet used: code 0 (length 4) at distance 3
+        commands.extend_from_slice(&[0x0F, 0x02]);
+        commands.extend((0..17u8).map(|i| 0x40 + i));
+        expected.extend((0..17u8).map(|i| 0x40 + i));
+        commands.extend_from_slice(&[0x03, 0x00]);
+        for _ in 0..4 {
+            let n = expected.len();
+            expected.push(expected[n - 3]);
+        }
+        // long form below 127: e = 3, length 19 + 3 = 22, distance 0x0014 (20)
+        commands.extend_from_slice(&[0xF0, 0x03, 0x14, 0x00]);
+        for _ in 0..22 {
+            let n = expected.len();
+            expected.push(expected[n - 20]);
+        }
+        // e = 127 with a one-byte extension 5: length 146 + 5, distance 7
+        commands.extend_from_slice(&[0xF0, 0x7F, 0x07, 0x00, 0x05]);
+        for _ in 0..151 {
+            let n = expected.len();
+            expected.push(expected[n - 7]);
+        }
+        // short form with LLLL = 15 and a two-byte extension 0xC1 0x39 (313): length 19 + 313, distance 4
+        commands.extend_from_slice(&[0xF0, 0xFC, 0xC1, 0x39]);
+        for _ in 0..332 {
+            let n = expected.len();
+            expected.push(expected[n - 4]);
+        }
+        // a final run of 9 literals where only 8 bytes remain: cut to the output
+        commands.push(0x09);
+        commands.extend_from_slice(b"12345678");
+        expected.extend_from_slice(b"12345678");
+
+        let input = lzb16_block(&commands);
+        let mut output = vec![0u8; expected.len()];
+        let n = Extractor::new()
+            .read_from_slice(&input, &mut output)
+            .unwrap();
+        assert_eq!(n, expected.len());
+        assert_eq!(output, expected);
+    }
+
+    #[test_log::test]
+    #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+    fn lzb16_refuses_a_match_before_its_history() {
+        // a match at distance 9 with 3 bytes of output
+        let input = lzb16_block(&[0x13, b'a', b'b', b'c', 0x09, 0x00]);
+        let mut output = vec![0u8; 8];
+        assert!(Extractor::new()
+            .read_from_slice(&input, &mut output)
+            .is_err());
+    }
+
     #[test_log::test]
     #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
     fn read_from_slice() {
